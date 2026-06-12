@@ -1,0 +1,119 @@
+import { Body, Controller, Get, Headers, Post, Query } from "@nestjs/common";
+import { IntegrationsService } from "./integrations.service";
+import { Public } from "../../common/auth/public.decorator";
+import { z } from "zod";
+
+const quoteSchema = z.object({
+  branchId: z.string().min(1),
+  roomId: z.string().min(1),
+  partySize: z.number().int().min(1),
+  serviceDate: z.string().min(1),
+  turn: z.enum(["mediodia", "noche"]),
+  preferredZone: z.string().optional()
+});
+
+const externalReservationSchema = z.object({
+  branchId: z.string().min(1),
+  roomId: z.string().min(1),
+  fullName: z.string().min(2),
+  phone: z.string().min(2),
+  email: z.string().email(),
+  partySize: z.number().int().min(1),
+  serviceDate: z.string().min(1),
+  turn: z.enum(["mediodia", "noche"]),
+  preferredZone: z.string().optional(),
+  preferredTags: z.array(z.string()).optional(),
+  birthday: z.string().optional(),
+  notes: z.string().optional()
+});
+
+const cancellationSchema = z.object({
+  code: z.string().min(3)
+});
+
+const updateReservationSchema = z.object({
+  code: z.string().min(3),
+  branchId: z.string().min(1).optional(),
+  roomId: z.string().min(1).optional(),
+  fullName: z.string().min(2).optional(),
+  phone: z.string().min(2).optional(),
+  email: z.string().email().optional(),
+  partySize: z.number().int().min(1).optional(),
+  serviceDate: z.string().min(1).optional(),
+  turn: z.enum(["mediodia", "noche"]).optional(),
+  preferredZone: z.string().nullable().optional(),
+  preferredTags: z.array(z.string()).optional(),
+  birthday: z.string().nullable().optional(),
+  notes: z.string().nullable().optional()
+});
+
+@Controller()
+export class IntegrationsController {
+  constructor(private readonly integrationsService: IntegrationsService) {}
+
+  @Get("integrations/events")
+  health() {
+    return this.integrationsService.recentEvents();
+  }
+
+  @Public()
+  @Post("external/reservations/quote")
+  quoteExternalReservation(@Headers("x-api-key") apiKey: string, @Body() body: unknown) {
+    return this.integrationsService.quoteExternalReservation(apiKey, quoteSchema.parse(body));
+  }
+
+  @Public()
+  @Post("external/reservations")
+  externalReservation(
+    @Headers("x-api-key") apiKey: string,
+    @Headers("idempotency-key") idempotencyKey: string | undefined,
+    @Body() body: unknown
+  ) {
+    return this.integrationsService.createExternalReservation(
+      apiKey,
+      externalReservationSchema.parse(body),
+      idempotencyKey
+    );
+  }
+
+  @Public()
+  @Post("external/reservations/update")
+  updateExternalReservation(
+    @Headers("x-api-key") apiKey: string,
+    @Headers("idempotency-key") idempotencyKey: string | undefined,
+    @Body() body: unknown
+  ) {
+    return this.integrationsService.updateExternalReservation(apiKey, updateReservationSchema.parse(body), idempotencyKey);
+  }
+
+  @Public()
+  @Post("external/reservations/cancel")
+  cancelExternalReservation(
+    @Headers("x-api-key") apiKey: string,
+    @Headers("idempotency-key") idempotencyKey: string | undefined,
+    @Body() body: unknown
+  ) {
+    return this.integrationsService.cancelExternalReservation(apiKey, cancellationSchema.parse(body), idempotencyKey);
+  }
+
+  @Public()
+  @Get("external/customers/find")
+  findExternalCustomer(
+    @Headers("x-api-key") apiKey: string,
+    @Query("email") email?: string,
+    @Query("phone") phone?: string
+  ) {
+    return this.integrationsService.findExternalCustomer(apiKey, { email, phone });
+  }
+
+  @Public()
+  @Get("external/reservations/find")
+  findExternalReservation(
+    @Headers("x-api-key") apiKey: string,
+    @Query("code") code?: string,
+    @Query("phone") phone?: string,
+    @Query("serviceDate") serviceDate?: string
+  ) {
+    return this.integrationsService.findExternalReservation(apiKey, { code, phone, serviceDate });
+  }
+}

@@ -1,0 +1,379 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlatformRole {
+  platform_admin
+}
+
+enum RestaurantRole {
+  restaurant_owner
+  restaurant_manager
+  host
+  waiter
+}
+
+enum ReservationStatus {
+  pending
+  confirmed
+  cancelled
+  seated
+  completed
+  no_show
+}
+
+enum TableStateStatus {
+  free
+  reserved
+  occupied
+  blocked
+}
+
+enum Turn {
+  mediodia
+  noche
+}
+
+enum AuthScope {
+  platform
+  restaurant
+}
+
+enum ExternalRequestStatus {
+  success
+  error
+}
+
+model PlatformUser {
+  id           String   @id @default(cuid())
+  fullName     String
+  email        String   @unique
+  passwordHash String
+  role         PlatformRole
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  auditLogs    AuditLog[]
+  refreshTokens RefreshToken[]
+}
+
+model Restaurant {
+  id                String              @id @default(cuid())
+  name              String
+  slug              String              @unique
+  isActive          Boolean             @default(true)
+  chatModuleEnabled Boolean             @default(false)
+  chatClientId      String?
+  chatWabaId        String?
+  chatAccessToken   String?
+  chatWorkflowId    String?
+  chatPhoneNumberId String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  branches          Branch[]
+  users             RestaurantUser[]
+  rooms             Room[]
+  roomZones         RoomZone[]
+  floorPlanItems    FloorPlanItem[]
+  tables            Table[]
+  tableCombinations TableCombination[]
+  customers         Customer[]
+  customerTags      CustomerTag[]
+  reservations      Reservation[]
+  serviceStates     ServiceState[]
+  integrationTokens IntegrationToken[]
+  externalApiRequests ExternalApiRequest[]
+  auditLogs         AuditLog[]
+}
+
+model RestaurantUser {
+  id           String         @id @default(cuid())
+  restaurantId String
+  fullName     String
+  email        String
+  passwordHash String
+  role         RestaurantRole
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@unique([restaurantId, email])
+  @@index([restaurantId, role])
+}
+
+model Branch {
+  id           String        @id @default(cuid())
+  restaurantId String
+  name         String
+  timezone     String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  rooms        Room[]
+  customers    Customer[]
+  reservations Reservation[]
+
+  @@index([restaurantId])
+}
+
+model Room {
+  id           String          @id @default(cuid())
+  branchId      String
+  restaurantId  String
+  name          String
+  description   String?
+  isOutdoor     Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  restaurant    Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch        Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  floorPlanItems FloorPlanItem[]
+  zones         RoomZone[]
+  tables        Table[]
+  reservations  Reservation[]
+
+  @@index([restaurantId, branchId])
+}
+
+model RoomZone {
+  id           String   @id @default(cuid())
+  roomId        String
+  restaurantId  String
+  name          String
+  slug          String
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  room          Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  tables        Table[]
+
+  @@unique([roomId, slug])
+  @@index([restaurantId])
+}
+
+model FloorPlanItem {
+  id           String   @id @default(cuid())
+  roomId        String
+  restaurantId  String
+  kind         String
+  label        String?
+  x            Float
+  y            Float
+  width        Float
+  height       Float
+  rotation     Float    @default(0)
+  metadata     Json?
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  room         Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, roomId])
+}
+
+model Table {
+  id            String             @id @default(cuid())
+  roomId         String
+  restaurantId   String
+  zoneId         String?
+  label         String
+  shape         String
+  seats         Int
+  x             Float    @default(0)
+  y             Float    @default(0)
+  width         Float    @default(112)
+  height        Float    @default(112)
+  rotation      Float    @default(0)
+  metadata      Json?
+  isReservable  Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  restaurant    Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  room          Room               @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  zone          RoomZone?          @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  states        ServiceState[]
+  reservationLinks ReservationTable[]
+  parentCombinations TableCombination[] @relation("ParentTable")
+  childCombinations  TableCombination[] @relation("ChildTable")
+
+  @@unique([roomId, label])
+  @@index([restaurantId, roomId])
+}
+
+model TableCombination {
+  id             String @id @default(cuid())
+  restaurantId   String
+  parentTableId  String
+  childTableId   String
+  combinedSeats  Int
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  parentTable    Table  @relation("ParentTable", fields: [parentTableId], references: [id], onDelete: Cascade)
+  childTable     Table  @relation("ChildTable", fields: [childTableId], references: [id], onDelete: Cascade)
+
+  @@unique([parentTableId, childTableId])
+  @@index([restaurantId])
+}
+
+model Customer {
+  id             String        @id @default(cuid())
+  restaurantId   String
+  branchId       String?
+  fullName       String
+  phone          String?
+  email          String?
+  birthday       DateTime?
+  notes          String?
+  reservationCount Int        @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  restaurant     Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch         Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  tags           CustomerTag[]
+  reservations   Reservation[]
+
+  @@index([restaurantId, branchId])
+  @@index([restaurantId, email])
+  @@unique([restaurantId, email])
+}
+
+model CustomerTag {
+  id          String   @id @default(cuid())
+  customerId   String
+  restaurantId String
+  label       String
+  restaurant  Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, customerId])
+}
+
+model Reservation {
+  id             String              @id @default(cuid())
+  restaurantId   String
+  branchId       String
+  roomId         String
+  customerId     String?
+  code           String              @unique
+  fullName       String
+  phone          String
+  email          String
+  partySize      Int
+  status         ReservationStatus   @default(pending)
+  turn           Turn
+  serviceDate    DateTime
+  preferredZone  String?
+  notes          String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  restaurant     Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch         Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  room           Room                @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  customer       Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  tables         ReservationTable[]
+
+  @@index([restaurantId, branchId, serviceDate, turn])
+  @@index([roomId, serviceDate, turn])
+}
+
+model ReservationTable {
+  id            String       @id @default(cuid())
+  reservationId String
+  tableId       String
+  reservation   Reservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  table         Table        @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@unique([reservationId, tableId])
+}
+
+model ServiceState {
+  id            String           @id @default(cuid())
+  restaurantId  String
+  branchId      String
+  roomId        String
+  tableId       String
+  reservationId String?
+  serviceDate   DateTime
+  turn          Turn
+  status        TableStateStatus
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  restaurant    Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table         Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
+
+  @@unique([tableId, serviceDate, turn])
+  @@index([restaurantId, branchId, roomId, serviceDate, turn])
+  @@index([tableId, serviceDate, turn])
+}
+
+model IntegrationToken {
+  id            String   @id @default(cuid())
+  restaurantId  String
+  label         String
+  tokenHash     String
+  isActive      Boolean  @default(true)
+  lastUsedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  requests      ExternalApiRequest[]
+
+  @@index([restaurantId])
+}
+
+model RefreshToken {
+  id               String          @id @default(cuid())
+  tokenHash        String          @unique
+  scope            AuthScope
+  platformUserId   String?
+  restaurantUserId String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  userAgent        String?
+  ipAddress        String?
+  lastUsedAt       DateTime?
+  createdAt        DateTime        @default(now())
+  platformUser     PlatformUser?   @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+  restaurantUser   RestaurantUser? @relation(fields: [restaurantUserId], references: [id], onDelete: Cascade)
+
+  @@index([scope, expiresAt])
+  @@index([platformUserId])
+  @@index([restaurantUserId])
+}
+
+model ExternalApiRequest {
+  id                 String                @id @default(cuid())
+  restaurantId       String
+  integrationTokenId String
+  action             String
+  idempotencyKey     String?
+  requestHash        String
+  status             ExternalRequestStatus
+  responseData       Json?
+  errorMessage       String?
+  createdAt          DateTime              @default(now())
+  processedAt        DateTime?
+  restaurant         Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  integrationToken   IntegrationToken      @relation(fields: [integrationTokenId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, action, idempotencyKey])
+  @@index([restaurantId, createdAt])
+  @@index([integrationTokenId, createdAt])
+}
+
+model AuditLog {
+  id              String        @id @default(cuid())
+  restaurantId    String?
+  platformUserId  String?
+  action          String
+  targetType      String
+  targetId        String
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+  restaurant      Restaurant?   @relation(fields: [restaurantId], references: [id], onDelete: SetNull)
+  platformUser    PlatformUser? @relation(fields: [platformUserId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, action])
+  @@index([platformUserId, createdAt])
+}

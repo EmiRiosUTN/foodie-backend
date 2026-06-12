@@ -1,0 +1,2 @@
+ALTER TABLE "Table"
+ADD COLUMN "metadata" JSONB;

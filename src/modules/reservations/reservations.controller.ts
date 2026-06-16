@@ -34,6 +34,19 @@ export class ReservationsController {
     return this.reservationsService.list(user, { branchId, serviceDate, turn });
   }
 
+  @Get("restaurant/reservations/history")
+  history(
+    @CurrentUser() user: RequestUser,
+    @Query("branchId") branchId?: string,
+    @Query("dateFrom") dateFrom?: string,
+    @Query("dateTo") dateTo?: string,
+    @Query("turn") turn?: "mediodia" | "noche" | "all",
+    @Query("status") status?: string,
+    @Query("search") search?: string
+  ) {
+    return this.reservationsService.history(user, { branchId, dateFrom, dateTo, turn, status, search });
+  }
+
   @Post("restaurant/reservations")
   create(@CurrentUser() user: RequestUser, @Body() body: unknown) {
     return this.reservationsService.create(user, reservationSchema.parse(body));

@@ -73,6 +73,63 @@ export class ReservationsService {
     });
   }
 
+  history(
+    user: RequestUser,
+    input: {
+      branchId?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      turn?: "mediodia" | "noche" | "all";
+      status?: string;
+      search?: string;
+    }
+  ) {
+    const restaurantId = this.restaurantScope(user);
+    const dateFrom = input.dateFrom ? new Date(input.dateFrom) : undefined;
+    const dateTo = input.dateTo ? new Date(input.dateTo) : undefined;
+
+    if ((input.dateFrom && (!dateFrom || Number.isNaN(dateFrom.getTime()))) || (input.dateTo && (!dateTo || Number.isNaN(dateTo.getTime())))) {
+      throw new BadRequestException("Invalid date range");
+    }
+
+    const search = input.search?.trim();
+
+    return this.prisma.reservation.findMany({
+      where: {
+        restaurantId,
+        ...(input.branchId ? { branchId: input.branchId } : {}),
+        ...(input.turn && input.turn !== "all" ? { turn: input.turn } : {}),
+        ...(input.status && input.status !== "all" ? { status: input.status as ReservationStatus } : {}),
+        ...(dateFrom || dateTo
+          ? {
+              serviceDate: {
+                ...(dateFrom ? { gte: dateFrom } : {}),
+                ...(dateTo ? { lte: dateTo } : {})
+              }
+            }
+          : {}),
+        ...(search
+          ? {
+              OR: [
+                { fullName: { contains: search, mode: "insensitive" } },
+                { phone: { contains: search, mode: "insensitive" } },
+                { email: { contains: search, mode: "insensitive" } },
+                { code: { contains: search, mode: "insensitive" } }
+              ]
+            }
+          : {})
+      },
+      include: {
+        branch: true,
+        room: true,
+        customer: { include: { tags: true } },
+        tables: { include: { table: true } }
+      },
+      orderBy: [{ serviceDate: "desc" }, { serviceTime: "asc" }, { createdAt: "desc" }],
+      take: 1000
+    });
+  }
+
   async create(
     user: RequestUser,
     input: {

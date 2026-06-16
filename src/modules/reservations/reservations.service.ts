@@ -31,6 +31,30 @@ export class ReservationsService {
     return value ? value.toLowerCase() : undefined;
   }
 
+  private normalizeServiceTime(serviceTime?: string, fallbackTurn?: "mediodia" | "noche") {
+    if (!serviceTime) {
+      return fallbackTurn === "mediodia" ? "13:00" : "20:00";
+    }
+
+    const match = /^(\d{2}):(\d{2})$/.exec(serviceTime);
+    if (!match) {
+      throw new BadRequestException("Invalid service time");
+    }
+
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours > 23 || minutes > 59) {
+      throw new BadRequestException("Invalid service time");
+    }
+
+    return serviceTime;
+  }
+
+  private deriveTurnFromServiceTime(serviceTime: string): "mediodia" | "noche" {
+    const hours = Number(serviceTime.slice(0, 2));
+    return hours < 17 ? "mediodia" : "noche";
+  }
+
   list(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
     const restaurantId = this.restaurantScope(user);
     return this.prisma.reservation.findMany({
@@ -45,7 +69,7 @@ export class ReservationsService {
         customer: { include: { tags: true } },
         tables: { include: { table: true } }
       },
-      orderBy: { createdAt: "desc" }
+      orderBy: [{ serviceTime: "asc" }, { createdAt: "desc" }]
     });
   }
 
@@ -59,7 +83,8 @@ export class ReservationsService {
       email: string;
       partySize: number;
       serviceDate: string;
-      turn: "mediodia" | "noche";
+      serviceTime: string;
+      turn?: "mediodia" | "noche";
       preferredZone?: string;
       preferredTags?: string[];
       birthday?: string;
@@ -80,7 +105,8 @@ export class ReservationsService {
       email: string;
       partySize: number;
       serviceDate: string;
-      turn: "mediodia" | "noche";
+      serviceTime?: string;
+      turn?: "mediodia" | "noche";
       preferredZone?: string;
       preferredTags?: string[];
       birthday?: string;
@@ -100,12 +126,14 @@ export class ReservationsService {
     if (Number.isNaN(serviceDate.getTime())) {
       throw new BadRequestException("Invalid service date");
     }
+    const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
+    const turn = this.deriveTurnFromServiceTime(serviceTime);
 
     const assignment = await this.assignTables({
       restaurantId,
       roomId: input.roomId,
       serviceDate,
-      turn: input.turn,
+      turn,
       partySize: input.partySize,
       preferredZone: input.preferredZone
     });
@@ -134,8 +162,9 @@ export class ReservationsService {
           email: normalizedInput.email,
           partySize: input.partySize,
           status: "confirmed",
-          turn: input.turn,
+          turn,
           serviceDate,
+          serviceTime,
           preferredZone: input.preferredZone,
           notes: input.notes,
           tables: {
@@ -158,7 +187,7 @@ export class ReservationsService {
               tableId_serviceDate_turn: {
                 tableId,
                 serviceDate,
-                turn: input.turn
+                turn
               }
             },
             update: {
@@ -174,7 +203,7 @@ export class ReservationsService {
               tableId,
               reservationId: created.id,
               serviceDate,
-              turn: input.turn,
+              turn,
               status: "reserved"
             }
           })
@@ -268,7 +297,8 @@ export class ReservationsService {
     roomId: string;
     partySize: number;
     serviceDate: string;
-    turn: "mediodia" | "noche";
+    serviceTime?: string;
+    turn?: "mediodia" | "noche";
     preferredZone?: string;
   }) {
     const room = await this.prisma.room.findFirst({
@@ -290,12 +320,14 @@ export class ReservationsService {
     if (Number.isNaN(serviceDate.getTime())) {
       throw new BadRequestException("Invalid service date");
     }
+    const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
+    const turn = this.deriveTurnFromServiceTime(serviceTime);
 
     const assignment = await this.assignTables({
       restaurantId: input.restaurantId,
       roomId: input.roomId,
       serviceDate,
-      turn: input.turn,
+      turn,
       partySize: input.partySize,
       preferredZone: input.preferredZone
     });
@@ -304,8 +336,9 @@ export class ReservationsService {
       available: Boolean(assignment),
       branchId: input.branchId,
       roomId: input.roomId,
-      turn: input.turn,
+      turn,
       serviceDate: serviceDate.toISOString(),
+      serviceTime,
       partySize: input.partySize,
       room: {
         id: room.id,
@@ -398,6 +431,7 @@ export class ReservationsService {
       email?: string;
       partySize?: number;
       serviceDate?: string;
+      serviceTime?: string;
       turn?: "mediodia" | "noche";
       preferredZone?: string | null;
       preferredTags?: string[];
@@ -427,9 +461,10 @@ export class ReservationsService {
 
     const nextBranchId = input.branchId || reservation.branchId;
     const nextRoomId = input.roomId || reservation.roomId;
-    const nextTurn = input.turn || reservation.turn;
     const nextPartySize = input.partySize || reservation.partySize;
     const nextServiceDate = input.serviceDate ? new Date(input.serviceDate) : reservation.serviceDate;
+    const nextServiceTime = this.normalizeServiceTime(input.serviceTime ?? reservation.serviceTime, input.turn || reservation.turn);
+    const nextTurn = this.deriveTurnFromServiceTime(nextServiceTime);
 
     if (Number.isNaN(nextServiceDate.getTime())) {
       throw new BadRequestException("Invalid service date");
@@ -513,6 +548,7 @@ export class ReservationsService {
           email: normalizedEmail,
           partySize: nextPartySize,
           serviceDate: nextServiceDate,
+          serviceTime: nextServiceTime,
           turn: nextTurn,
           preferredZone: input.preferredZone === null ? null : input.preferredZone ?? reservation.preferredZone,
           notes: input.notes === null ? null : input.notes ?? reservation.notes,

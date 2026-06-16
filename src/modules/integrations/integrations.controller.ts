@@ -8,8 +8,11 @@ const quoteSchema = z.object({
   roomId: z.string().min(1),
   partySize: z.number().int().min(1),
   serviceDate: z.string().min(1),
-  turn: z.enum(["mediodia", "noche"]),
+  serviceTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  turn: z.enum(["mediodia", "noche"]).optional(),
   preferredZone: z.string().optional()
+}).refine((value) => value.serviceTime || value.turn, {
+  message: "serviceTime or turn is required"
 });
 
 const externalReservationSchema = z.object({
@@ -20,11 +23,14 @@ const externalReservationSchema = z.object({
   email: z.string().email(),
   partySize: z.number().int().min(1),
   serviceDate: z.string().min(1),
-  turn: z.enum(["mediodia", "noche"]),
+  serviceTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  turn: z.enum(["mediodia", "noche"]).optional(),
   preferredZone: z.string().optional(),
   preferredTags: z.array(z.string()).optional(),
   birthday: z.string().optional(),
   notes: z.string().optional()
+}).refine((value) => value.serviceTime || value.turn, {
+  message: "serviceTime or turn is required"
 });
 
 const cancellationSchema = z.object({
@@ -40,6 +46,7 @@ const updateReservationSchema = z.object({
   email: z.string().email().optional(),
   partySize: z.number().int().min(1).optional(),
   serviceDate: z.string().min(1).optional(),
+  serviceTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   turn: z.enum(["mediodia", "noche"]).optional(),
   preferredZone: z.string().nullable().optional(),
   preferredTags: z.array(z.string()).optional(),

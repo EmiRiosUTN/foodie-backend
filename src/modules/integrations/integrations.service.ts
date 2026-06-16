@@ -29,7 +29,8 @@ export class IntegrationsService {
       roomId: string;
       partySize: number;
       serviceDate: string;
-      turn: "mediodia" | "noche";
+      serviceTime?: string;
+      turn?: "mediodia" | "noche";
       preferredZone?: string;
     }
   ) {
@@ -63,7 +64,8 @@ export class IntegrationsService {
       email: string;
       partySize: number;
       serviceDate: string;
-      turn: "mediodia" | "noche";
+      serviceTime?: string;
+      turn?: "mediodia" | "noche";
       preferredZone?: string;
       preferredTags?: string[];
       birthday?: string;
@@ -186,6 +188,7 @@ export class IntegrationsService {
       email?: string;
       partySize?: number;
       serviceDate?: string;
+      serviceTime?: string;
       turn?: "mediodia" | "noche";
       preferredZone?: string | null;
       preferredTags?: string[];

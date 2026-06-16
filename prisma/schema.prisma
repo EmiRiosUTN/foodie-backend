@@ -263,6 +263,7 @@ model Reservation {
   status         ReservationStatus   @default(pending)
   turn           Turn
   serviceDate    DateTime
+  serviceTime    String              @default("20:00")
   preferredZone  String?
   notes          String?
   createdAt      DateTime            @default(now())

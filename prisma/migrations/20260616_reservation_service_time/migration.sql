@@ -1,0 +1,1 @@
+ALTER TABLE "Reservation" ADD COLUMN "serviceTime" TEXT NOT NULL DEFAULT '20:00';

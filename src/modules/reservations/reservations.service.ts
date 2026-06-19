@@ -293,19 +293,46 @@ export class ReservationsService {
 
   async moveToState(user: RequestUser, reservationId: string, next: "seated" | "completed") {
     const restaurantId = this.restaurantScope(user);
+    return this.moveReservationToStateForRestaurant(restaurantId, { reservationId }, next, { actorUserId: user.sub });
+  }
+
+  async moveReservationToStateForRestaurant(
+    restaurantId: string,
+    input: { reservationId?: string; code?: string },
+    next: "seated" | "completed",
+    options?: { actorUserId?: string | null; idempotencyKey?: string | null }
+  ) {
     const reservation = await this.prisma.reservation.findFirst({
-      where: { id: reservationId, restaurantId },
+      where: {
+        restaurantId,
+        ...(input.reservationId ? { id: input.reservationId } : {}),
+        ...(input.code ? { code: input.code } : {})
+      },
       include: { tables: true }
     });
     if (!reservation) throw new NotFoundException("Reservation not found");
+
+    if (reservation.status === "cancelled") {
+      throw new ConflictException("Cancelled reservation cannot be changed");
+    }
+
+    if (next === "seated" && reservation.status === "completed") {
+      throw new ConflictException("Completed reservation cannot be checked in");
+    }
 
     const nextStatus: ReservationStatus = next;
     const tableStatus = next === "seated" ? "occupied" : "free";
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const changed = await tx.reservation.update({
-        where: { id: reservationId },
-        data: { status: nextStatus }
+        where: { id: reservation.id },
+        data: { status: nextStatus },
+        include: {
+          room: true,
+          branch: true,
+          customer: { include: { tags: true } },
+          tables: { include: { table: true } }
+        }
       });
 
       await Promise.all(
@@ -341,8 +368,20 @@ export class ReservationsService {
 
     this.realtimeService.publish("reservation.updated", {
       restaurantId,
-      reservationId,
+      reservationId: reservation.id,
       status: nextStatus
+    });
+
+    await this.auditService.log({
+      action: next === "seated" ? "reservation.checked_in" : "reservation.completed",
+      targetType: "reservation",
+      targetId: reservation.id,
+      restaurantId,
+      restaurantUserId: options?.actorUserId || null,
+      metadata: {
+        code: reservation.code,
+        idempotencyKey: options?.idempotencyKey || null
+      }
     });
 
     return updated;

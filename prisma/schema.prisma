@@ -16,6 +16,8 @@ enum RestaurantRole {
   restaurant_manager
   host
   waiter
+  cashier
+  kitchen
 }
 
 enum ReservationStatus {
@@ -72,6 +74,8 @@ model Restaurant {
   chatAccessToken   String?
   chatWorkflowId    String?
   chatPhoneNumberId String?
+  chatAuthEmail     String?
+  chatAuthSecret    String?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
   branches          Branch[]
@@ -88,11 +92,13 @@ model Restaurant {
   integrationTokens IntegrationToken[]
   externalApiRequests ExternalApiRequest[]
   auditLogs         AuditLog[]
+  chatActivityLogs  ChatActivityLog[]
 }
 
 model RestaurantUser {
   id           String         @id @default(cuid())
   restaurantId String
+  createdByUserId String?
   fullName     String
   email        String
   passwordHash String
@@ -101,7 +107,11 @@ model RestaurantUser {
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  createdBy    RestaurantUser? @relation("RestaurantUserCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdUsers RestaurantUser[] @relation("RestaurantUserCreatedBy")
   refreshTokens RefreshToken[]
+  auditLogs    AuditLog[]
+  chatActivityLogs ChatActivityLog[]
 
   @@unique([restaurantId, email])
   @@index([restaurantId, role])
@@ -363,10 +373,42 @@ model ExternalApiRequest {
   @@index([integrationTokenId, createdAt])
 }
 
+model ChatActivityLog {
+  id               String   @id @default(cuid())
+  restaurantId     String
+  restaurantUserId String?
+  action           String
+  status           String
+  chatId           String
+  chatClientId     String?
+  contactName      String?
+  contactPhone     String?
+  messageType      String
+  messageContent   String?
+  templateId       String?
+  templateName     String?
+  templateParameters Json?
+  fileName         String?
+  fileMimeType     String?
+  fileSize         Int?
+  externalMessageId String?
+  externalResponse Json?
+  errorMessage     String?
+  metadata         Json?
+  createdAt        DateTime @default(now())
+  restaurant       Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  restaurantUser   RestaurantUser? @relation(fields: [restaurantUserId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, createdAt])
+  @@index([restaurantUserId, createdAt])
+  @@index([chatId, createdAt])
+}
+
 model AuditLog {
   id              String        @id @default(cuid())
   restaurantId    String?
   platformUserId  String?
+  restaurantUserId String?
   action          String
   targetType      String
   targetId        String
@@ -374,7 +416,9 @@ model AuditLog {
   createdAt       DateTime      @default(now())
   restaurant      Restaurant?   @relation(fields: [restaurantId], references: [id], onDelete: SetNull)
   platformUser    PlatformUser? @relation(fields: [platformUserId], references: [id], onDelete: SetNull)
+  restaurantUser  RestaurantUser? @relation(fields: [restaurantUserId], references: [id], onDelete: SetNull)
 
   @@index([restaurantId, action])
   @@index([platformUserId, createdAt])
+  @@index([restaurantUserId, createdAt])
 }

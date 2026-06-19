@@ -37,6 +37,10 @@ const cancellationSchema = z.object({
   code: z.string().min(3)
 });
 
+const reservationCodeSchema = z.object({
+  code: z.string().min(3)
+});
+
 const updateReservationSchema = z.object({
   code: z.string().min(3),
   branchId: z.string().min(1).optional(),
@@ -101,6 +105,26 @@ export class IntegrationsController {
     @Body() body: unknown
   ) {
     return this.integrationsService.cancelExternalReservation(apiKey, cancellationSchema.parse(body), idempotencyKey);
+  }
+
+  @Public()
+  @Post("external/reservations/check-in")
+  checkInExternalReservation(
+    @Headers("x-api-key") apiKey: string,
+    @Headers("idempotency-key") idempotencyKey: string | undefined,
+    @Body() body: unknown
+  ) {
+    return this.integrationsService.checkInExternalReservation(apiKey, reservationCodeSchema.parse(body), idempotencyKey);
+  }
+
+  @Public()
+  @Post("external/reservations/release")
+  releaseExternalReservation(
+    @Headers("x-api-key") apiKey: string,
+    @Headers("idempotency-key") idempotencyKey: string | undefined,
+    @Body() body: unknown
+  ) {
+    return this.integrationsService.releaseExternalReservation(apiKey, reservationCodeSchema.parse(body), idempotencyKey);
   }
 
   @Public()

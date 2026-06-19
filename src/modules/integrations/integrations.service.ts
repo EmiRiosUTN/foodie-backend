@@ -400,6 +400,130 @@ export class IntegrationsService {
     return result;
   }
 
+  async checkInExternalReservation(apiKey: string, input: { code: string }, idempotencyKey?: string) {
+    return this.transitionExternalReservation(apiKey, input, "check_in_reservation", "seated", idempotencyKey);
+  }
+
+  async releaseExternalReservation(apiKey: string, input: { code: string }, idempotencyKey?: string) {
+    return this.transitionExternalReservation(apiKey, input, "release_reservation", "completed", idempotencyKey);
+  }
+
+  private async transitionExternalReservation(
+    apiKey: string,
+    input: { code: string },
+    action: "check_in_reservation" | "release_reservation",
+    nextStatus: "seated" | "completed",
+    idempotencyKey?: string
+  ) {
+    const token = await this.resolveToken(apiKey);
+    if (!token) {
+      throw new ForbiddenException("Invalid API key");
+    }
+
+    await this.consumeRateLimit(token.restaurantId);
+    const requestHash = createRequestHash(input);
+
+    let existingRequest:
+      | {
+          id: string;
+          requestHash: string;
+          status: "success" | "error";
+          responseData: unknown;
+        }
+      | null = null;
+
+    if (idempotencyKey) {
+      existingRequest = await this.prisma.externalApiRequest.findFirst({
+        where: {
+          restaurantId: token.restaurantId,
+          action,
+          idempotencyKey
+        },
+        select: {
+          id: true,
+          requestHash: true,
+          status: true,
+          responseData: true
+        }
+      });
+
+      if (existingRequest && existingRequest.requestHash !== requestHash) {
+        throw new ConflictException("Idempotency key already used with a different payload");
+      }
+
+      if (existingRequest?.status === "success" && existingRequest.responseData) {
+        return existingRequest.responseData;
+      }
+    }
+
+    const requestLog = existingRequest
+      ? await this.prisma.externalApiRequest.update({
+          where: { id: existingRequest.id },
+          data: {
+            integrationTokenId: token.id,
+            requestHash,
+            status: "error",
+            responseData: Prisma.DbNull,
+            errorMessage: null,
+            processedAt: null
+          }
+        })
+      : await this.prisma.externalApiRequest.create({
+          data: {
+            restaurantId: token.restaurantId,
+            integrationTokenId: token.id,
+            action,
+            idempotencyKey,
+            requestHash,
+            status: "error"
+          }
+        });
+
+    try {
+      const updated = await this.reservationsService.moveReservationToStateForRestaurant(
+        token.restaurantId,
+        { code: input.code },
+        nextStatus,
+        { idempotencyKey: idempotencyKey || null }
+      );
+
+      await this.prisma.$transaction([
+        this.prisma.externalApiRequest.update({
+          where: { id: requestLog.id },
+          data: {
+            status: "success",
+            responseData: updated,
+            processedAt: new Date()
+          }
+        }),
+        this.prisma.integrationToken.update({
+          where: { id: token.id },
+          data: { lastUsedAt: new Date() }
+        })
+      ]);
+
+      await this.auditService.log({
+        action: nextStatus === "seated" ? "external_reservation.checked_in" : "external_reservation.completed",
+        targetType: "reservation",
+        targetId: updated.id,
+        restaurantId: token.restaurantId,
+        metadata: { code: input.code, idempotencyKey: idempotencyKey || null }
+      });
+
+      return updated;
+    } catch (error) {
+      await this.prisma.externalApiRequest.update({
+        where: { id: requestLog.id },
+        data: {
+          status: "error",
+          errorMessage: error instanceof Error ? error.message : "Unknown external reservation transition error",
+          processedAt: new Date()
+        }
+      });
+      throw error;
+    }
+  }
+
   async findExternalCustomer(apiKey: string, input: { email?: string; phone?: string }) {
     const token = await this.resolveToken(apiKey);
     if (!token) {

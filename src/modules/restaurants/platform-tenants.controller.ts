@@ -14,7 +14,7 @@ const restaurantUserSchema = z.object({
   fullName: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(4),
-  role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter"])
+  role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter", "cashier", "kitchen"])
 });
 
 const updateRestaurantUserSchema = z
@@ -22,7 +22,7 @@ const updateRestaurantUserSchema = z
     fullName: z.string().min(2).optional(),
     email: z.string().email().optional(),
     password: z.string().min(4).optional(),
-    role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter"]).optional(),
+    role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter", "cashier", "kitchen"]).optional(),
     isActive: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, {

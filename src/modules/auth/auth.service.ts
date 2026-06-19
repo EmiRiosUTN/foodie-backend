@@ -5,6 +5,7 @@ import { UnauthorizedException } from "@nestjs/common";
 import { hashPassword, verifyPassword } from "../../common/security/password";
 import type { TokenPayload } from "../../common/auth/token-payload";
 import { createOpaqueToken, hashOpaqueToken } from "../../common/security/token-hash";
+import { decryptSecret } from "../../common/security/encrypted-secret";
 
 @Injectable()
 export class AuthService {
@@ -87,7 +88,7 @@ export class AuthService {
       throw new UnauthorizedException(input.context === "restaurant" ? "Invalid restaurant credentials" : "Invalid credentials");
     }
 
-    return this.issueToken({
+    const issued = await this.issueToken({
       sub: user.id,
       scope: "restaurant",
       role: user.role,
@@ -95,6 +96,13 @@ export class AuthService {
       fullName: user.fullName,
       restaurantId: user.restaurantId
     }, sessionMeta);
+
+    const chatSession = await this.loginToChat(user.restaurant.chatAuthEmail, user.restaurant.chatAuthSecret);
+
+    return {
+      ...issued,
+      chatSession
+    };
   }
 
   async refresh(refreshToken: string, sessionMeta?: { userAgent?: string; ipAddress?: string }) {
@@ -175,5 +183,34 @@ export class AuthService {
       refreshToken,
       user: payload
     };
+  }
+
+  private async loginToChat(email?: string | null, encryptedPassword?: string | null) {
+    if (!email || !encryptedPassword) return null;
+
+    try {
+      const password = decryptSecret(encryptedPassword);
+      if (!password) return null;
+
+      const baseUrl = process.env.CHAT_API_URL || "https://chat.pupuia.com/api";
+      const response = await fetch(`${baseUrl}/auth/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ email, password })
+      });
+
+      if (!response.ok) return null;
+      const data = await response.json() as { token?: string; user?: unknown };
+      if (!data.token || !data.user) return null;
+
+      return {
+        token: data.token,
+        user: data.user
+      };
+    } catch {
+      return null;
+    }
   }
 }

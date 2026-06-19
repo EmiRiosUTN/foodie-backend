@@ -4,4 +4,6 @@ export type RestaurantRole =
   | "restaurant_owner"
   | "restaurant_manager"
   | "host"
-  | "waiter";
+  | "waiter"
+  | "cashier"
+  | "kitchen";

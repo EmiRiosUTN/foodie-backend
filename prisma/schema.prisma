@@ -67,6 +67,7 @@ model Restaurant {
   id                String              @id @default(cuid())
   name              String
   slug              String              @unique
+  profileImageUrl   String?
   isActive          Boolean             @default(true)
   chatModuleEnabled Boolean             @default(false)
   chatClientId      String?

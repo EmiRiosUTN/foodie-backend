@@ -70,6 +70,7 @@ export class RestaurantsService {
         id: true,
         name: true,
         slug: true,
+        profileImageUrl: true,
         branches: {
           include: {
             rooms: {
@@ -88,6 +89,7 @@ export class RestaurantsService {
     input: {
       restaurantName: string;
       slug: string;
+      profileImageUrl?: string;
       branchName: string;
       timezone: string;
       ownerFullName: string;
@@ -104,6 +106,7 @@ export class RestaurantsService {
         data: {
           name: input.restaurantName,
           slug: input.slug,
+          profileImageUrl: input.profileImageUrl || null,
           chatAuthEmail: input.ownerEmail,
           chatAuthSecret: encryptSecret(input.ownerPassword),
           branches: {

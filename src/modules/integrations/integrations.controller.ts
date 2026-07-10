@@ -3,69 +3,111 @@ import { IntegrationsService } from "./integrations.service";
 import { Public } from "../../common/auth/public.decorator";
 import { z } from "zod";
 
+const emptyToUndefined = (value: unknown) => {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  return value;
+};
+
+const emptyToNull = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  return value;
+};
+
+const optionalString = z.preprocess(emptyToUndefined, z.string().optional());
+const requiredString = z.preprocess(emptyToUndefined, z.string().min(1));
+const optionalEmail = z.preprocess(emptyToUndefined, z.string().email().optional());
+const requiredEmail = z.preprocess(emptyToUndefined, z.string().email());
+const optionalNullableString = z.preprocess(emptyToNull, z.string().nullable().optional());
+
+const optionalTurn = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["mediodia", "medio dia", "almuerzo", "dia", "día"].includes(normalized)) return "mediodia";
+  if (["noche", "cena"].includes(normalized)) return "noche";
+  return normalized;
+}, z.enum(["mediodia", "noche"]).optional());
+
+const preferredTagsSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    const tags = value.split(",").map((tag) => tag.trim()).filter(Boolean);
+    return tags.length ? tags : undefined;
+  }
+  return value;
+}, z.array(z.string()).optional());
+
 const quoteSchema = z.object({
-  restaurantId: z.string().min(1).optional(),
-  branchId: z.string().min(1),
-  roomId: z.string().min(1),
+  restaurantId: optionalString,
+  branchId: requiredString,
+  roomId: requiredString,
   partySize: z.coerce.number().int().min(1),
-  serviceDate: z.string().min(1),
-  serviceTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  turn: z.enum(["mediodia", "noche"]).optional(),
-  preferredZone: z.string().optional()
+  serviceDate: requiredString,
+  serviceTime: z.preprocess(emptyToUndefined, z.string().regex(/^\d{2}:\d{2}$/).optional()),
+  turn: optionalTurn,
+  preferredZone: optionalString
 }).refine((value) => value.serviceTime || value.turn, {
   message: "serviceTime or turn is required"
 });
 
 const externalReservationSchema = z.object({
-  restaurantId: z.string().min(1).optional(),
-  branchId: z.string().min(1),
-  roomId: z.string().min(1),
-  fullName: z.string().min(2),
-  phone: z.string().min(2),
-  email: z.string().email(),
+  restaurantId: optionalString,
+  branchId: requiredString,
+  roomId: requiredString,
+  fullName: z.preprocess(emptyToUndefined, z.string().min(2)),
+  phone: z.preprocess(emptyToUndefined, z.string().min(2)),
+  email: requiredEmail,
   partySize: z.coerce.number().int().min(1),
-  serviceDate: z.string().min(1),
-  serviceTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  turn: z.enum(["mediodia", "noche"]).optional(),
-  preferredZone: z.string().optional(),
-  preferredTags: z.array(z.string()).optional(),
-  birthday: z.string().optional(),
-  notes: z.string().optional()
+  serviceDate: requiredString,
+  serviceTime: z.preprocess(emptyToUndefined, z.string().regex(/^\d{2}:\d{2}$/).optional()),
+  turn: optionalTurn,
+  preferredZone: optionalString,
+  preferredTags: preferredTagsSchema,
+  birthday: optionalString,
+  notes: optionalString
 }).refine((value) => value.serviceTime || value.turn, {
   message: "serviceTime or turn is required"
 });
 
 const externalRoomsSchema = z.object({
-  restaurantId: z.string().min(1).optional(),
-  branchId: z.string().min(1).optional()
+  restaurantId: optionalString,
+  branchId: optionalString
 });
 
 const cancellationSchema = z.object({
-  restaurantId: z.string().min(1).optional(),
-  code: z.string().min(3)
+  restaurantId: optionalString,
+  code: z.preprocess(emptyToUndefined, z.string().min(3))
 });
 
 const reservationCodeSchema = z.object({
-  restaurantId: z.string().min(1).optional(),
-  code: z.string().min(3)
+  restaurantId: optionalString,
+  code: z.preprocess(emptyToUndefined, z.string().min(3))
 });
 
 const updateReservationSchema = z.object({
-  restaurantId: z.string().min(1).optional(),
-  code: z.string().min(3),
-  branchId: z.string().min(1).optional(),
-  roomId: z.string().min(1).optional(),
-  fullName: z.string().min(2).optional(),
-  phone: z.string().min(2).optional(),
-  email: z.string().email().optional(),
+  restaurantId: optionalString,
+  code: z.preprocess(emptyToUndefined, z.string().min(3)),
+  branchId: optionalString,
+  roomId: optionalString,
+  fullName: z.preprocess(emptyToUndefined, z.string().min(2).optional()),
+  phone: z.preprocess(emptyToUndefined, z.string().min(2).optional()),
+  email: optionalEmail,
   partySize: z.coerce.number().int().min(1).optional(),
-  serviceDate: z.string().min(1).optional(),
-  serviceTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  turn: z.enum(["mediodia", "noche"]).optional(),
-  preferredZone: z.string().nullable().optional(),
-  preferredTags: z.array(z.string()).optional(),
-  birthday: z.string().nullable().optional(),
-  notes: z.string().nullable().optional()
+  serviceDate: optionalString,
+  serviceTime: z.preprocess(emptyToUndefined, z.string().regex(/^\d{2}:\d{2}$/).optional()),
+  turn: optionalTurn,
+  preferredZone: optionalNullableString,
+  preferredTags: preferredTagsSchema,
+  birthday: optionalNullableString,
+  notes: optionalNullableString
 });
 
 @Controller()

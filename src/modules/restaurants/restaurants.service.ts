@@ -15,17 +15,11 @@ export class RestaurantsService {
     private readonly auditService: AuditService
   ) {}
 
-  list() {
-    return this.prisma.restaurant.findMany({
+  async list() {
+    const restaurants = await this.prisma.restaurant.findMany({
       orderBy: { createdAt: "desc" },
       include: {
         branches: {
-          include: {
-            rooms: {
-              select: { id: true, name: true, branchId: true },
-              orderBy: { createdAt: "asc" }
-            }
-          },
           orderBy: { createdAt: "asc" }
         },
         users: {
@@ -43,19 +37,36 @@ export class RestaurantsService {
         }
       }
     });
+
+    const restaurantIds = restaurants.map((restaurant) => restaurant.id);
+    const rooms = restaurantIds.length
+      ? await this.prisma.room.findMany({
+          where: { restaurantId: { in: restaurantIds } },
+          select: { id: true, name: true, branchId: true },
+          orderBy: { createdAt: "asc" }
+        })
+      : [];
+
+    const roomsByBranchId = rooms.reduce<Record<string, typeof rooms>>((acc, room) => {
+      acc[room.branchId] = acc[room.branchId] || [];
+      acc[room.branchId].push(room);
+      return acc;
+    }, {});
+
+    return restaurants.map((restaurant) => ({
+      ...restaurant,
+      branches: restaurant.branches.map((branch) => ({
+        ...branch,
+        rooms: roomsByBranchId[branch.id] || []
+      }))
+    }));
   }
 
-  detail(restaurantId: string) {
-    return this.prisma.restaurant.findUnique({
+  async detail(restaurantId: string) {
+    const restaurant = await this.prisma.restaurant.findUnique({
       where: { id: restaurantId },
       include: {
         branches: {
-          include: {
-            rooms: {
-              select: { id: true, name: true, branchId: true },
-              orderBy: { createdAt: "asc" }
-            }
-          },
           orderBy: { createdAt: "asc" }
         },
         users: {
@@ -71,6 +82,28 @@ export class RestaurantsService {
         }
       }
     });
+
+    if (!restaurant) return null;
+
+    const rooms = await this.prisma.room.findMany({
+      where: { restaurantId },
+      select: { id: true, name: true, branchId: true },
+      orderBy: { createdAt: "asc" }
+    });
+
+    const roomsByBranchId = rooms.reduce<Record<string, typeof rooms>>((acc, room) => {
+      acc[room.branchId] = acc[room.branchId] || [];
+      acc[room.branchId].push(room);
+      return acc;
+    }, {});
+
+    return {
+      ...restaurant,
+      branches: restaurant.branches.map((branch) => ({
+        ...branch,
+        rooms: roomsByBranchId[branch.id] || []
+      }))
+    };
   }
 
   bootstrap(user: RequestUser) {

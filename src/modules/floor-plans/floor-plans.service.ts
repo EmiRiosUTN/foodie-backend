@@ -17,6 +17,10 @@ type TableMetadata = {
   manualFeatures?: {
     hasTvView?: boolean;
   };
+  capacity?: {
+    minPartySize?: number;
+    maxPartySize?: number;
+  };
   derivedFeatures?: {
     nearWindow?: boolean;
     nearColumn?: boolean;
@@ -66,6 +70,10 @@ export class FloorPlansService {
     return {
       manualFeatures: {
         hasTvView: Boolean(source.manualFeatures?.hasTvView)
+      },
+      capacity: {
+        minPartySize: source.capacity?.minPartySize,
+        maxPartySize: source.capacity?.maxPartySize
       },
       derivedFeatures: {
         nearWindow: near("window", 120),

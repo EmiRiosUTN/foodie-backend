@@ -9,6 +9,12 @@ import { createRequestHash } from "../../common/utils/code";
 import { AuditService } from "../audit/audit.service";
 import { hashOpaqueToken } from "../../common/security/token-hash";
 
+type ResolvedIntegrationToken = {
+  id: string;
+  restaurantId: string;
+  isGlobal: boolean;
+};
+
 @Injectable()
 export class IntegrationsService {
   constructor(
@@ -25,6 +31,7 @@ export class IntegrationsService {
   async quoteExternalReservation(
     apiKey: string,
     input: {
+      restaurantId?: string;
       branchId: string;
       roomId: string;
       partySize: number;
@@ -34,7 +41,7 @@ export class IntegrationsService {
       preferredZone?: string;
     }
   ) {
-    const token = await this.resolveToken(apiKey);
+    const token = await this.resolveToken(apiKey, input.restaurantId);
     if (!token) {
       throw new ForbiddenException("Invalid API key");
     }
@@ -43,7 +50,13 @@ export class IntegrationsService {
 
     const quote = await this.reservationsService.quoteReservationForRestaurant({
       restaurantId: token.restaurantId,
-      ...input
+      branchId: input.branchId,
+      roomId: input.roomId,
+      partySize: input.partySize,
+      serviceDate: input.serviceDate,
+      serviceTime: input.serviceTime,
+      turn: input.turn,
+      preferredZone: input.preferredZone
     });
 
     await this.prisma.integrationToken.update({
@@ -57,6 +70,7 @@ export class IntegrationsService {
   async createExternalReservation(
     apiKey: string,
     input: {
+      restaurantId?: string;
       branchId: string;
       roomId: string;
       fullName: string;
@@ -73,7 +87,7 @@ export class IntegrationsService {
     },
     idempotencyKey?: string
   ) {
-    const token = await this.resolveToken(apiKey);
+    const token = await this.resolveToken(apiKey, input.restaurantId);
     if (!token) {
       throw new ForbiddenException("Invalid API key");
     }
@@ -136,9 +150,12 @@ export class IntegrationsService {
         });
 
     try {
-      const created = await this.reservationsService.createReservationForRestaurant(token.restaurantId, input, {
-        idempotencyKey
-      });
+      const { restaurantId: _restaurantId, ...reservationInput } = input;
+      const created = await this.reservationsService.createReservationForRestaurant(
+        token.restaurantId,
+        reservationInput,
+        { idempotencyKey }
+      );
 
       await this.prisma.$transaction([
         this.prisma.externalApiRequest.update({
@@ -180,6 +197,7 @@ export class IntegrationsService {
   async updateExternalReservation(
     apiKey: string,
     input: {
+      restaurantId?: string;
       code: string;
       branchId?: string;
       roomId?: string;
@@ -197,7 +215,7 @@ export class IntegrationsService {
     },
     idempotencyKey?: string
   ) {
-    const token = await this.resolveToken(apiKey);
+    const token = await this.resolveToken(apiKey, input.restaurantId);
     if (!token) {
       throw new ForbiddenException("Invalid API key");
     }
@@ -260,9 +278,12 @@ export class IntegrationsService {
         });
 
     try {
-      const updated = await this.reservationsService.updateReservationForRestaurant(token.restaurantId, input, {
-        idempotencyKey
-      });
+      const { restaurantId: _restaurantId, ...reservationInput } = input;
+      const updated = await this.reservationsService.updateReservationForRestaurant(
+        token.restaurantId,
+        reservationInput,
+        { idempotencyKey }
+      );
 
       await this.prisma.$transaction([
         this.prisma.externalApiRequest.update({
@@ -301,8 +322,8 @@ export class IntegrationsService {
     }
   }
 
-  async cancelExternalReservation(apiKey: string, input: { code: string }, idempotencyKey?: string) {
-    const token = await this.resolveToken(apiKey);
+  async cancelExternalReservation(apiKey: string, input: { restaurantId?: string; code: string }, idempotencyKey?: string) {
+    const token = await this.resolveToken(apiKey, input.restaurantId);
     if (!token) {
       throw new ForbiddenException("Invalid API key");
     }
@@ -400,22 +421,22 @@ export class IntegrationsService {
     return result;
   }
 
-  async checkInExternalReservation(apiKey: string, input: { code: string }, idempotencyKey?: string) {
+  async checkInExternalReservation(apiKey: string, input: { restaurantId?: string; code: string }, idempotencyKey?: string) {
     return this.transitionExternalReservation(apiKey, input, "check_in_reservation", "seated", idempotencyKey);
   }
 
-  async releaseExternalReservation(apiKey: string, input: { code: string }, idempotencyKey?: string) {
+  async releaseExternalReservation(apiKey: string, input: { restaurantId?: string; code: string }, idempotencyKey?: string) {
     return this.transitionExternalReservation(apiKey, input, "release_reservation", "completed", idempotencyKey);
   }
 
   private async transitionExternalReservation(
     apiKey: string,
-    input: { code: string },
+    input: { restaurantId?: string; code: string },
     action: "check_in_reservation" | "release_reservation",
     nextStatus: "seated" | "completed",
     idempotencyKey?: string
   ) {
-    const token = await this.resolveToken(apiKey);
+    const token = await this.resolveToken(apiKey, input.restaurantId);
     if (!token) {
       throw new ForbiddenException("Invalid API key");
     }
@@ -524,15 +545,18 @@ export class IntegrationsService {
     }
   }
 
-  async findExternalCustomer(apiKey: string, input: { email?: string; phone?: string }) {
-    const token = await this.resolveToken(apiKey);
+  async findExternalCustomer(apiKey: string, input: { restaurantId?: string; email?: string; phone?: string }) {
+    const token = await this.resolveToken(apiKey, input.restaurantId);
     if (!token) {
       throw new ForbiddenException("Invalid API key");
     }
 
     await this.consumeRateLimit(token.restaurantId);
 
-    const customer = await this.reservationsService.findCustomerForRestaurant(token.restaurantId, input);
+    const customer = await this.reservationsService.findCustomerForRestaurant(token.restaurantId, {
+      email: input.email,
+      phone: input.phone
+    });
 
     await this.prisma.integrationToken.update({
       where: { id: token.id },
@@ -542,15 +566,19 @@ export class IntegrationsService {
     return customer;
   }
 
-  async findExternalReservation(apiKey: string, input: { code?: string; phone?: string; serviceDate?: string }) {
-    const token = await this.resolveToken(apiKey);
+  async findExternalReservation(apiKey: string, input: { restaurantId?: string; code?: string; phone?: string; serviceDate?: string }) {
+    const token = await this.resolveToken(apiKey, input.restaurantId);
     if (!token) {
       throw new ForbiddenException("Invalid API key");
     }
 
     await this.consumeRateLimit(token.restaurantId);
 
-    const reservation = await this.reservationsService.findReservationForRestaurant(token.restaurantId, input);
+    const reservation = await this.reservationsService.findReservationForRestaurant(token.restaurantId, {
+      code: input.code,
+      phone: input.phone,
+      serviceDate: input.serviceDate
+    });
 
     await this.prisma.integrationToken.update({
       where: { id: token.id },
@@ -560,7 +588,46 @@ export class IntegrationsService {
     return reservation;
   }
 
-  private async resolveToken(apiKey: string) {
+  private async resolveToken(apiKey: string, restaurantId?: string): Promise<ResolvedIntegrationToken | null> {
+    if (!apiKey) return null;
+
+    const globalApiKey = process.env.FOODIE_EXTERNAL_API_KEY || process.env.FOODIE_GLOBAL_API_KEY;
+    if (globalApiKey && apiKey === globalApiKey) {
+      if (!restaurantId) {
+        throw new ForbiddenException("restaurantId is required when using global API key");
+      }
+
+      const restaurant = await this.prisma.restaurant.findFirst({
+        where: { id: restaurantId, isActive: true },
+        select: { id: true }
+      });
+      if (!restaurant) {
+        throw new ForbiddenException("Restaurant not found for global API key");
+      }
+
+      const tokenHash = hashOpaqueToken(apiKey);
+      const token = await this.prisma.integrationToken.upsert({
+        where: {
+          id: `global_${restaurantId}`
+        },
+        update: {
+          tokenHash,
+          isActive: true,
+          label: "Global external API key"
+        },
+        create: {
+          id: `global_${restaurantId}`,
+          restaurantId,
+          label: "Global external API key",
+          tokenHash,
+          isActive: true
+        },
+        select: { id: true, restaurantId: true }
+      });
+
+      return { ...token, isGlobal: true };
+    }
+
     const hashedApiKey = hashOpaqueToken(apiKey);
     const directMatch = await this.prisma.integrationToken.findFirst({
       where: {
@@ -570,7 +637,10 @@ export class IntegrationsService {
       include: { restaurant: true }
     });
     if (directMatch) {
-      return directMatch;
+      if (restaurantId && directMatch.restaurantId !== restaurantId) {
+        throw new ForbiddenException("API key does not belong to requested restaurant");
+      }
+      return { id: directMatch.id, restaurantId: directMatch.restaurantId, isGlobal: false };
     }
 
     const legacyTokens = await this.prisma.integrationToken.findMany({
@@ -578,7 +648,12 @@ export class IntegrationsService {
       include: { restaurant: true }
     });
 
-    return legacyTokens.find((candidate) => verifyPassword(apiKey, candidate.tokenHash)) || null;
+    const legacyToken = legacyTokens.find((candidate) => verifyPassword(apiKey, candidate.tokenHash));
+    if (!legacyToken) return null;
+    if (restaurantId && legacyToken.restaurantId !== restaurantId) {
+      throw new ForbiddenException("API key does not belong to requested restaurant");
+    }
+    return { id: legacyToken.id, restaurantId: legacyToken.restaurantId, isGlobal: false };
   }
 
   private async consumeRateLimit(restaurantId: string) {

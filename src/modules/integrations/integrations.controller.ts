@@ -4,6 +4,7 @@ import { Public } from "../../common/auth/public.decorator";
 import { z } from "zod";
 
 const quoteSchema = z.object({
+  restaurantId: z.string().min(1).optional(),
   branchId: z.string().min(1),
   roomId: z.string().min(1),
   partySize: z.number().int().min(1),
@@ -16,6 +17,7 @@ const quoteSchema = z.object({
 });
 
 const externalReservationSchema = z.object({
+  restaurantId: z.string().min(1).optional(),
   branchId: z.string().min(1),
   roomId: z.string().min(1),
   fullName: z.string().min(2),
@@ -34,14 +36,17 @@ const externalReservationSchema = z.object({
 });
 
 const cancellationSchema = z.object({
+  restaurantId: z.string().min(1).optional(),
   code: z.string().min(3)
 });
 
 const reservationCodeSchema = z.object({
+  restaurantId: z.string().min(1).optional(),
   code: z.string().min(3)
 });
 
 const updateReservationSchema = z.object({
+  restaurantId: z.string().min(1).optional(),
   code: z.string().min(3),
   branchId: z.string().min(1).optional(),
   roomId: z.string().min(1).optional(),
@@ -131,20 +136,22 @@ export class IntegrationsController {
   @Get("external/customers/find")
   findExternalCustomer(
     @Headers("x-api-key") apiKey: string,
+    @Query("restaurantId") restaurantId?: string,
     @Query("email") email?: string,
     @Query("phone") phone?: string
   ) {
-    return this.integrationsService.findExternalCustomer(apiKey, { email, phone });
+    return this.integrationsService.findExternalCustomer(apiKey, { restaurantId, email, phone });
   }
 
   @Public()
   @Get("external/reservations/find")
   findExternalReservation(
     @Headers("x-api-key") apiKey: string,
+    @Query("restaurantId") restaurantId?: string,
     @Query("code") code?: string,
     @Query("phone") phone?: string,
     @Query("serviceDate") serviceDate?: string
   ) {
-    return this.integrationsService.findExternalReservation(apiKey, { code, phone, serviceDate });
+    return this.integrationsService.findExternalReservation(apiKey, { restaurantId, code, phone, serviceDate });
   }
 }

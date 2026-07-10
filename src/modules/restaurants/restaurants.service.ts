@@ -19,7 +19,15 @@ export class RestaurantsService {
     return this.prisma.restaurant.findMany({
       orderBy: { createdAt: "desc" },
       include: {
-        branches: true,
+        branches: {
+          include: {
+            rooms: {
+              select: { id: true, name: true, branchId: true },
+              orderBy: { createdAt: "asc" }
+            }
+          },
+          orderBy: { createdAt: "asc" }
+        },
         users: {
           select: { id: true, fullName: true, email: true, role: true, isActive: true }
         },
@@ -42,6 +50,12 @@ export class RestaurantsService {
       where: { id: restaurantId },
       include: {
         branches: {
+          include: {
+            rooms: {
+              select: { id: true, name: true, branchId: true },
+              orderBy: { createdAt: "asc" }
+            }
+          },
           orderBy: { createdAt: "asc" }
         },
         users: {

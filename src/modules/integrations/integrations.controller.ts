@@ -35,6 +35,11 @@ const externalReservationSchema = z.object({
   message: "serviceTime or turn is required"
 });
 
+const externalRoomsSchema = z.object({
+  restaurantId: z.string().min(1).optional(),
+  branchId: z.string().min(1).optional()
+});
+
 const cancellationSchema = z.object({
   restaurantId: z.string().min(1).optional(),
   code: z.string().min(3)
@@ -70,6 +75,16 @@ export class IntegrationsController {
   @Get("integrations/events")
   health() {
     return this.integrationsService.recentEvents();
+  }
+
+  @Public()
+  @Get("external/rooms")
+  listExternalRooms(
+    @Headers("x-api-key") apiKey: string,
+    @Query("restaurantId") restaurantId?: string,
+    @Query("branchId") branchId?: string
+  ) {
+    return this.integrationsService.listExternalRooms(apiKey, externalRoomsSchema.parse({ restaurantId, branchId }));
   }
 
   @Public()

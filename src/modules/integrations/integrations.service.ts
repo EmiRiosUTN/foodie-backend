@@ -28,6 +28,53 @@ export class IntegrationsService {
     return this.realtimeService.recent();
   }
 
+  async listExternalRooms(apiKey: string, input: { restaurantId?: string; branchId?: string }) {
+    const token = await this.resolveToken(apiKey, input.restaurantId);
+    if (!token) {
+      throw new ForbiddenException("Invalid API key");
+    }
+
+    await this.consumeRateLimit(token.restaurantId);
+
+    const branches = await this.prisma.branch.findMany({
+      where: {
+        restaurantId: token.restaurantId,
+        ...(input.branchId ? { id: input.branchId } : {})
+      },
+      select: {
+        id: true,
+        name: true,
+        timezone: true,
+        rooms: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            isOutdoor: true,
+            _count: {
+              select: {
+                tables: true,
+                zones: true
+              }
+            }
+          },
+          orderBy: { createdAt: "asc" }
+        }
+      },
+      orderBy: { createdAt: "asc" }
+    });
+
+    await this.prisma.integrationToken.update({
+      where: { id: token.id },
+      data: { lastUsedAt: new Date() }
+    });
+
+    return {
+      restaurantId: token.restaurantId,
+      branches
+    };
+  }
+
   async quoteExternalReservation(
     apiKey: string,
     input: {

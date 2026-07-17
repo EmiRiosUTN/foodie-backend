@@ -22,11 +22,7 @@ export class ReservationsService {
     return user.restaurantId;
   }
 
-  private normalizeEmail(email: string) {
-    return email.trim().toLowerCase();
-  }
-
-  private normalizeOptionalEmail(email?: string) {
+  private normalizeOptionalEmail(email?: string | null) {
     const value = email?.trim();
     return value ? value.toLowerCase() : undefined;
   }
@@ -137,7 +133,7 @@ export class ReservationsService {
       roomId: string;
       fullName: string;
       phone: string;
-      email: string;
+      email?: string | null;
       partySize: number;
       serviceDate: string;
       serviceTime: string;
@@ -159,7 +155,7 @@ export class ReservationsService {
       roomId: string;
       fullName: string;
       phone: string;
-      email: string;
+      email?: string | null;
       partySize: number;
       serviceDate: string;
       serviceTime?: string;
@@ -202,7 +198,7 @@ export class ReservationsService {
     const reservation = await this.prisma.$transaction(async (tx) => {
       const normalizedInput = {
         ...input,
-        email: this.normalizeEmail(input.email)
+        email: this.normalizeOptionalEmail(input.email)
       };
       const customer = await this.upsertCustomer(tx, restaurantId, normalizedInput, {
         incrementReservationCount: true
@@ -216,7 +212,7 @@ export class ReservationsService {
           code: createReservationCode(),
           fullName: input.fullName,
           phone: input.phone,
-          email: normalizedInput.email,
+          email: normalizedInput.email ?? null,
           partySize: input.partySize,
           status: "confirmed",
           turn,
@@ -593,7 +589,9 @@ export class ReservationsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const normalizedEmail = this.normalizeEmail(input.email || reservation.email);
+      const normalizedEmail = input.email !== undefined
+        ? this.normalizeOptionalEmail(input.email)
+        : reservation.email;
       const customer = await this.upsertCustomer(
         tx,
         restaurantId,
@@ -601,7 +599,7 @@ export class ReservationsService {
           branchId: nextBranchId,
           fullName: input.fullName || reservation.fullName,
           phone: input.phone || reservation.phone,
-          email: normalizedEmail,
+          email: normalizedEmail ?? null,
           birthday:
             input.birthday === null
               ? undefined
@@ -641,7 +639,7 @@ export class ReservationsService {
           customerId: customer.id,
           fullName: input.fullName || reservation.fullName,
           phone: input.phone || reservation.phone,
-          email: normalizedEmail,
+          email: normalizedEmail ?? null,
           partySize: nextPartySize,
           serviceDate: nextServiceDate,
           serviceTime: nextServiceTime,
@@ -794,7 +792,7 @@ export class ReservationsService {
       branchId: string;
       fullName: string;
       phone: string;
-      email: string;
+      email?: string | null;
       birthday?: string;
       preferredTags?: string[];
       notes?: string;
@@ -803,14 +801,18 @@ export class ReservationsService {
       incrementReservationCount?: boolean;
     }
   ) {
-    const normalizedEmail = this.normalizeEmail(input.email);
+    const normalizedEmail = this.normalizeOptionalEmail(input.email);
     const incrementReservationCount = options?.incrementReservationCount ?? true;
-    const existing = await tx.customer.findFirst({
-      where: {
-        restaurantId,
-        email: normalizedEmail
-      }
-    });
+    // Sin email no hay una clave confiable para identificar a la persona.
+    // Se crea un cliente nuevo para evitar unificar contactos distintos.
+    const existing = normalizedEmail
+      ? await tx.customer.findFirst({
+          where: {
+            restaurantId,
+            email: normalizedEmail
+          }
+        })
+      : null;
 
     const birthday = input.birthday ? new Date(input.birthday) : undefined;
 
@@ -820,7 +822,7 @@ export class ReservationsService {
         data: {
           fullName: input.fullName,
           phone: input.phone,
-          email: normalizedEmail,
+          email: normalizedEmail ?? null,
           birthday,
           notes: input.notes,
           reservationCount: incrementReservationCount
@@ -851,7 +853,7 @@ export class ReservationsService {
         branchId: input.branchId,
         fullName: input.fullName,
         phone: input.phone,
-        email: normalizedEmail,
+        email: normalizedEmail ?? null,
         birthday,
         notes: input.notes,
         reservationCount: incrementReservationCount ? 1 : 0

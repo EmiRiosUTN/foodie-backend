@@ -24,14 +24,13 @@ const emptyToNull = (value: unknown) => {
 const optionalString = z.preprocess(emptyToUndefined, z.string().optional());
 const requiredString = z.preprocess(emptyToUndefined, z.string().min(1));
 const optionalEmail = z.preprocess(emptyToUndefined, z.string().email().optional());
-const requiredEmail = z.preprocess(emptyToUndefined, z.string().email());
 const optionalNullableString = z.preprocess(emptyToNull, z.string().nullable().optional());
 
 const optionalTurn = z.preprocess((value) => {
   if (typeof value !== "string") return value;
   const normalized = value.trim().toLowerCase();
   if (!normalized) return undefined;
-  if (["mediodia", "medio dia", "almuerzo", "dia", "día"].includes(normalized)) return "mediodia";
+  if (["mediodia", "medio dia", "almuerzo", "dia", "d\u00EDa"].includes(normalized)) return "mediodia";
   if (["noche", "cena"].includes(normalized)) return "noche";
   return normalized;
 }, z.enum(["mediodia", "noche"]).optional());
@@ -64,7 +63,7 @@ const externalReservationSchema = z.object({
   roomId: requiredString,
   fullName: z.preprocess(emptyToUndefined, z.string().min(2)),
   phone: z.preprocess(emptyToUndefined, z.string().min(2)),
-  email: requiredEmail,
+  email: optionalEmail,
   partySize: z.coerce.number().int().min(1),
   serviceDate: requiredString,
   serviceTime: z.preprocess(emptyToUndefined, z.string().regex(/^\d{2}:\d{2}$/).optional()),

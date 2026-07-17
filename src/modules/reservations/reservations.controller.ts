@@ -9,7 +9,10 @@ const reservationSchema = z.object({
   roomId: z.string().min(1),
   fullName: z.string().min(2),
   phone: z.string().min(2),
-  email: z.string().email(),
+  email: z.preprocess(
+    (value) => (typeof value === "string" && !value.trim() ? undefined : value),
+    z.string().email().optional().nullable()
+  ),
   partySize: z.number().int().min(1),
   serviceDate: z.string().min(1),
   serviceTime: z.string().regex(/^\d{2}:\d{2}$/),

@@ -122,7 +122,7 @@ export class IntegrationsService {
       roomId: string;
       fullName: string;
       phone: string;
-      email: string;
+      email?: string | null;
       partySize: number;
       serviceDate: string;
       serviceTime?: string;

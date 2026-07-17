@@ -269,7 +269,7 @@ model Reservation {
   code           String              @unique
   fullName       String
   phone          String
-  email          String
+  email          String?
   partySize      Int
   status         ReservationStatus   @default(pending)
   turn           Turn

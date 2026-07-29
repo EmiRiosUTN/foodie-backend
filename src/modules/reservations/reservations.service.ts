@@ -168,7 +168,7 @@ export class ReservationsService {
     options?: { actorUserId?: string; idempotencyKey?: string }
   ) {
     const room = await this.prisma.room.findFirst({
-      where: { id: input.roomId, restaurantId, branchId: input.branchId },
+      where: { id: input.roomId, restaurantId, branchId: input.branchId, isActive: true },
       include: { tables: true }
     });
     if (!room) {
@@ -873,3 +873,4 @@ export class ReservationsService {
     return customer;
   }
 }
+

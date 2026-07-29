@@ -30,7 +30,7 @@ export class RestaurantsService {
         },
         _count: {
           select: {
-            rooms: true,
+            rooms: { where: { isActive: true } },
             customers: true,
             reservations: true
           }
@@ -41,7 +41,7 @@ export class RestaurantsService {
     const restaurantIds = restaurants.map((restaurant) => restaurant.id);
     const rooms = restaurantIds.length
       ? await this.prisma.room.findMany({
-          where: { restaurantId: { in: restaurantIds } },
+          where: { restaurantId: { in: restaurantIds }, isActive: true },
           select: { id: true, name: true, branchId: true },
           orderBy: { createdAt: "asc" }
         })
@@ -78,7 +78,7 @@ export class RestaurantsService {
           orderBy: { createdAt: "desc" }
         },
         _count: {
-          select: { rooms: true, customers: true, reservations: true }
+          select: { rooms: { where: { isActive: true } }, customers: true, reservations: true }
         }
       }
     });
@@ -121,6 +121,7 @@ export class RestaurantsService {
         branches: {
           include: {
             rooms: {
+              where: { isActive: true },
               include: {
                 zones: true,
                 tables: true
@@ -665,3 +666,4 @@ export class RestaurantsService {
     };
   }
 }
+

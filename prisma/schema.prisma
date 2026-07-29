@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -140,6 +141,7 @@ model Room {
   name          String
   description   String?
   isOutdoor     Boolean         @default(false)
+  isActive      Boolean         @default(true)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   restaurant    Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
@@ -423,3 +425,4 @@ model AuditLog {
   @@index([platformUserId, createdAt])
   @@index([restaurantUserId, createdAt])
 }
+

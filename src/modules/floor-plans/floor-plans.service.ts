@@ -89,6 +89,7 @@ export class FloorPlansService {
     return this.prisma.room.findMany({
       where: {
         restaurantId,
+        isActive: true,
         ...(branchId ? { branchId } : {})
       },
       include: {
@@ -123,7 +124,7 @@ export class FloorPlansService {
   ) {
     const restaurantId = this.restaurantScope(user);
     const existing = await this.prisma.room.findFirst({
-      where: { id: roomId, restaurantId }
+      where: { id: roomId, restaurantId, isActive: true }
     });
 
     if (!existing) {
@@ -143,40 +144,16 @@ export class FloorPlansService {
   async remove(user: RequestUser, roomId: string) {
     const restaurantId = this.restaurantScope(user);
     const room = await this.prisma.room.findFirst({
-      where: { id: roomId, restaurantId },
-      include: { reservations: { take: 1 } }
+      where: { id: roomId, restaurantId, isActive: true },
     });
 
     if (!room) {
       throw new NotFoundException("Room not found");
     }
 
-    if (room.reservations.length) {
-      throw new ForbiddenException("Cannot delete room with reservations");
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.tableCombination.deleteMany({
-        where: {
-          restaurantId,
-          OR: [{ parentTable: { roomId } }, { childTable: { roomId } }]
-        }
-      });
-      await tx.serviceState.deleteMany({
-        where: { restaurantId, roomId }
-      });
-      await tx.floorPlanItem.deleteMany({
-        where: { restaurantId, roomId }
-      });
-      await tx.table.deleteMany({
-        where: { restaurantId, roomId }
-      });
-      await tx.roomZone.deleteMany({
-        where: { restaurantId, roomId }
-      });
-      await tx.room.delete({
-        where: { id: roomId }
-      });
+    await this.prisma.room.update({
+      where: { id: roomId },
+      data: { isActive: false }
     });
 
     return { ok: true };
@@ -185,7 +162,7 @@ export class FloorPlansService {
   async detail(user: RequestUser, roomId: string) {
     const restaurantId = this.restaurantScope(user);
     const room = await this.prisma.room.findFirst({
-      where: { id: roomId, restaurantId },
+      where: { id: roomId, restaurantId, isActive: true },
       include: {
         zones: true,
         floorPlanItems: true,
@@ -247,7 +224,7 @@ export class FloorPlansService {
     const restaurantId = this.restaurantScope(user);
 
     const room = await this.prisma.room.findFirst({
-      where: { id: roomId, restaurantId }
+      where: { id: roomId, restaurantId, isActive: true }
     });
     if (!room) throw new NotFoundException("Room not found");
 
@@ -433,3 +410,4 @@ export class FloorPlansService {
     return result;
   }
 }
+

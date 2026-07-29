@@ -46,6 +46,7 @@ export class IntegrationsService {
         name: true,
         timezone: true,
         rooms: {
+          where: { isActive: true },
           select: {
             id: true,
             name: true,
@@ -717,3 +718,4 @@ export class IntegrationsService {
     }
   }
 }
+

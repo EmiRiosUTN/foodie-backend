@@ -5,7 +5,8 @@ import type { RequestUser } from "../../common/auth/request-user";
 import { createReservationCode } from "../../common/utils/code";
 import { RealtimeService } from "../realtime/realtime.service";
 import { AuditService } from "../audit/audit.service";
-import { ReservationStatus } from "@prisma/client";
+import { Prisma, ReservationStatus } from "@prisma/client";
+import { getSharedTableFeatures, tableMatchesPreferredFeatures, type PreferredFeature } from "./preferred-features";
 
 @Injectable()
 export class ReservationsService {
@@ -139,6 +140,7 @@ export class ReservationsService {
       serviceTime: string;
       turn?: "mediodia" | "noche";
       preferredZone?: string;
+      preferredFeatures?: PreferredFeature[];
       preferredTags?: string[];
       birthday?: string;
       notes?: string;
@@ -161,6 +163,7 @@ export class ReservationsService {
       serviceTime?: string;
       turn?: "mediodia" | "noche";
       preferredZone?: string;
+      preferredFeatures?: PreferredFeature[];
       preferredTags?: string[];
       birthday?: string;
       notes?: string;
@@ -182,20 +185,70 @@ export class ReservationsService {
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
 
-    const assignment = await this.assignTables({
+    const preferredFeatures = input.preferredFeatures || [];
+    const requestedAssignment = await this.assignTables(this.prisma, {
       restaurantId,
       roomId: input.roomId,
       serviceDate,
       turn,
       partySize: input.partySize,
-      preferredZone: input.preferredZone
+      preferredZone: input.preferredZone,
+      preferredFeatures
     });
 
-    if (!assignment) {
+    if (!requestedAssignment) {
+      const generalAssignment = preferredFeatures.length
+        ? await this.assignTables(this.prisma, {
+            restaurantId,
+            roomId: input.roomId,
+            serviceDate,
+            turn,
+            partySize: input.partySize,
+            preferredZone: input.preferredZone
+          })
+        : null;
+      if (preferredFeatures.length) {
+        throw new ConflictException({
+          code: "PREFERRED_FEATURE_UNAVAILABLE",
+          message: "No hay mesas disponibles que cumplan las caracteristicas solicitadas.",
+          preferredFeatures,
+          generalAvailability: Boolean(generalAssignment)
+        });
+      }
       throw new ConflictException("No valid table or combination available");
     }
 
     const reservation = await this.prisma.$transaction(async (tx) => {
+      const assignment = await this.assignTables(tx, {
+        restaurantId,
+        roomId: input.roomId,
+        serviceDate,
+        turn,
+        partySize: input.partySize,
+        preferredZone: input.preferredZone,
+        preferredFeatures
+      });
+      if (!assignment) {
+        const generalAssignment = preferredFeatures.length
+          ? await this.assignTables(tx, {
+              restaurantId,
+              roomId: input.roomId,
+              serviceDate,
+              turn,
+              partySize: input.partySize,
+              preferredZone: input.preferredZone
+            })
+          : null;
+        if (preferredFeatures.length) {
+          throw new ConflictException({
+            code: "PREFERRED_FEATURE_UNAVAILABLE",
+            message: "No hay mesas disponibles que cumplan las caracteristicas solicitadas.",
+            preferredFeatures,
+            generalAvailability: Boolean(generalAssignment)
+          });
+        }
+        throw new ConflictException("No valid table or combination available");
+      }
       const normalizedInput = {
         ...input,
         email: this.normalizeOptionalEmail(input.email)
@@ -220,6 +273,15 @@ export class ReservationsService {
           serviceTime,
           preferredZone: input.preferredZone,
           notes: input.notes,
+          metadata: {
+            seatingPreference: {
+              requestedFeatures: preferredFeatures,
+              matched: true,
+              assignedFeatures: assignment.features,
+              assignedTableIds: assignment.tableIds,
+              assignedTableLabels: assignment.tableLabels
+            }
+          } as Prisma.InputJsonValue,
           tables: {
             createMany: {
               data: assignment.tableIds.map((tableId) => ({ tableId }))
@@ -392,6 +454,7 @@ export class ReservationsService {
     serviceTime?: string;
     turn?: "mediodia" | "noche";
     preferredZone?: string;
+    preferredFeatures?: PreferredFeature[];
   }) {
     const room = await this.prisma.room.findFirst({
       where: {
@@ -414,18 +477,35 @@ export class ReservationsService {
     }
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
-
-    const assignment = await this.assignTables({
+    const preferredFeatures = input.preferredFeatures || [];
+    const preferredAssignment = await this.assignTables(this.prisma, {
       restaurantId: input.restaurantId,
       roomId: input.roomId,
       serviceDate,
       turn,
       partySize: input.partySize,
-      preferredZone: input.preferredZone
+      preferredZone: input.preferredZone,
+      preferredFeatures
     });
+    const generalAssignment = preferredAssignment || !preferredFeatures.length
+      ? null
+      : await this.assignTables(this.prisma, {
+          restaurantId: input.restaurantId,
+          roomId: input.roomId,
+          serviceDate,
+          turn,
+          partySize: input.partySize,
+          preferredZone: input.preferredZone
+        });
+    const status = preferredAssignment
+      ? "preferred_available"
+      : generalAssignment
+        ? "general_only"
+        : "unavailable";
 
     return {
-      available: Boolean(assignment),
+      available: Boolean(preferredAssignment || generalAssignment),
+      status,
       branchId: input.branchId,
       roomId: input.roomId,
       turn,
@@ -438,15 +518,20 @@ export class ReservationsService {
         isOutdoor: room.isOutdoor
       },
       preferredZone: input.preferredZone || null,
-      assignment: assignment
+      preference: {
+        requested: preferredFeatures,
+        matched: Boolean(preferredAssignment)
+      },
+      assignment: preferredAssignment
         ? {
-            tableIds: assignment.tableIds,
-            tableLabels: assignment.tableLabels,
-            seats: assignment.seats,
-            combination: assignment.tableIds.length > 1
+            tableIds: preferredAssignment.tableIds,
+            tableLabels: preferredAssignment.tableLabels,
+            seats: preferredAssignment.seats,
+            combination: preferredAssignment.tableIds.length > 1,
+            features: preferredAssignment.features
           }
         : null,
-      reason: assignment ? null : "No valid table or combination available"
+      reason: preferredAssignment || generalAssignment ? null : "No valid table or combination available"
     };
   }
 
@@ -574,7 +659,7 @@ export class ReservationsService {
       throw new NotFoundException("Room not found");
     }
 
-    const assignment = await this.assignTables({
+    const assignment = await this.assignTables(this.prisma, {
       restaurantId,
       roomId: nextRoomId,
       serviceDate: nextServiceDate,
@@ -715,16 +800,20 @@ export class ReservationsService {
     return updated;
   }
 
-  private async assignTables(input: {
-    restaurantId: string;
-    roomId: string;
-    serviceDate: Date;
-    turn: "mediodia" | "noche";
-    partySize: number;
-    preferredZone?: string;
-    excludeReservationId?: string;
-  }) {
-    const roomTables = await this.prisma.table.findMany({
+  private async assignTables(
+    client: PrismaService | Prisma.TransactionClient,
+    input: {
+      restaurantId: string;
+      roomId: string;
+      serviceDate: Date;
+      turn: "mediodia" | "noche";
+      partySize: number;
+      preferredZone?: string;
+      preferredFeatures?: PreferredFeature[];
+      excludeReservationId?: string;
+    }
+  ) {
+    const roomTables = await client.table.findMany({
       where: {
         restaurantId: input.restaurantId,
         roomId: input.roomId,
@@ -735,7 +824,7 @@ export class ReservationsService {
 
     const takenIds = new Set(
       (
-        await this.prisma.serviceState.findMany({
+        await client.serviceState.findMany({
           where: {
             restaurantId: input.restaurantId,
             roomId: input.roomId,
@@ -748,43 +837,52 @@ export class ReservationsService {
       ).map((item) => item.tableId)
     );
 
-    const availableTables = roomTables.filter((table) => !takenIds.has(table.id));
+    const preferredFeatures = input.preferredFeatures || [];
+    const availableTables = roomTables
+      .filter((table) => !takenIds.has(table.id))
+      .filter((table) => tableMatchesPreferredFeatures(table, preferredFeatures));
 
     const single = availableTables
       .filter((table) => table.seats >= input.partySize)
       .sort((a, b) => a.seats - b.seats)[0];
 
     if (single) {
-      return { tableIds: [single.id], tableLabels: [single.label], seats: single.seats };
+      return {
+        tableIds: [single.id],
+        tableLabels: [single.label],
+        seats: single.seats,
+        features: getSharedTableFeatures([single])
+      };
     }
 
-    const combinations = await this.prisma.tableCombination.findMany({
+    const combinations = await client.tableCombination.findMany({
       where: {
         restaurantId: input.restaurantId,
         parentTable: { roomId: input.roomId },
         childTable: { roomId: input.roomId }
       }
     });
-
+    const availableTableIds = new Set(availableTables.map((table) => table.id));
     const validCombos = combinations
-      .filter((combo) => !takenIds.has(combo.parentTableId) && !takenIds.has(combo.childTableId))
+      .filter((combo) => availableTableIds.has(combo.parentTableId) && availableTableIds.has(combo.childTableId))
       .filter((combo) => combo.combinedSeats >= input.partySize)
       .sort((a, b) => a.combinedSeats - b.combinedSeats);
 
-    if (!validCombos.length) {
-      return null;
-    }
+    if (!validCombos.length) return null;
+
+    const selected = validCombos[0];
+    const tables = [
+      availableTables.find((table) => table.id === selected.parentTableId),
+      availableTables.find((table) => table.id === selected.childTableId)
+    ].filter((table): table is (typeof availableTables)[number] => Boolean(table));
 
     return {
-      tableIds: [validCombos[0].parentTableId, validCombos[0].childTableId],
-      tableLabels: [
-        roomTables.find((table) => table.id === validCombos[0].parentTableId)?.label || validCombos[0].parentTableId,
-        roomTables.find((table) => table.id === validCombos[0].childTableId)?.label || validCombos[0].childTableId
-      ],
-      seats: validCombos[0].combinedSeats
+      tableIds: [selected.parentTableId, selected.childTableId],
+      tableLabels: tables.map((table) => table.label),
+      seats: selected.combinedSeats,
+      features: getSharedTableFeatures(tables)
     };
   }
-
   private async upsertCustomer(
     tx: any,
     restaurantId: string,
@@ -873,4 +971,3 @@ export class ReservationsService {
     return customer;
   }
 }
-

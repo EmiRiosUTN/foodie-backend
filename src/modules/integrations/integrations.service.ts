@@ -8,6 +8,7 @@ import { RealtimeService } from "../realtime/realtime.service";
 import { createRequestHash } from "../../common/utils/code";
 import { AuditService } from "../audit/audit.service";
 import { hashOpaqueToken } from "../../common/security/token-hash";
+import type { PreferredFeature } from "../reservations/preferred-features";
 
 type ResolvedIntegrationToken = {
   id: string;
@@ -87,6 +88,7 @@ export class IntegrationsService {
       serviceTime?: string;
       turn?: "mediodia" | "noche";
       preferredZone?: string;
+      preferredFeatures: PreferredFeature[];
     }
   ) {
     const token = await this.resolveToken(apiKey, input.restaurantId);
@@ -104,7 +106,8 @@ export class IntegrationsService {
       serviceDate: input.serviceDate,
       serviceTime: input.serviceTime,
       turn: input.turn,
-      preferredZone: input.preferredZone
+      preferredZone: input.preferredZone,
+      preferredFeatures: input.preferredFeatures
     });
 
     await this.prisma.integrationToken.update({
@@ -129,6 +132,7 @@ export class IntegrationsService {
       serviceTime?: string;
       turn?: "mediodia" | "noche";
       preferredZone?: string;
+      preferredFeatures: PreferredFeature[];
       preferredTags?: string[];
       birthday?: string;
       notes?: string;
@@ -204,13 +208,37 @@ export class IntegrationsService {
         reservationInput,
         { idempotencyKey }
       );
+      const metadata = created.metadata && typeof created.metadata === "object" && !Array.isArray(created.metadata)
+        ? created.metadata as {
+            seatingPreference?: {
+              requestedFeatures?: PreferredFeature[];
+              matched?: boolean;
+              assignedFeatures?: Record<PreferredFeature, boolean>;
+              assignedTableLabels?: string[];
+            };
+          }
+        : null;
+      const seatingPreference = metadata?.seatingPreference;
+      const response = {
+        ...created,
+        preference: {
+          requested: seatingPreference?.requestedFeatures || input.preferredFeatures,
+          matched: seatingPreference?.matched === true
+        },
+        assignment: seatingPreference
+          ? {
+              tableLabels: seatingPreference.assignedTableLabels || [],
+              features: seatingPreference.assignedFeatures || null
+            }
+          : null
+      };
 
       await this.prisma.$transaction([
         this.prisma.externalApiRequest.update({
           where: { id: requestLog.id },
           data: {
             status: "success",
-            responseData: created,
+            responseData: response,
             processedAt: new Date()
           }
         }),
@@ -228,7 +256,7 @@ export class IntegrationsService {
         metadata: { idempotencyKey: idempotencyKey || null }
       });
 
-      return created;
+      return response;
     } catch (error) {
       await this.prisma.externalApiRequest.update({
         where: { id: requestLog.id },
@@ -718,4 +746,3 @@ export class IntegrationsService {
     }
   }
 }
-

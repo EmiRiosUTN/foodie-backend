@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, Post, Query } from "@nestjs/common";
 import { IntegrationsService } from "./integrations.service";
 import { Public } from "../../common/auth/public.decorator";
 import { z } from "zod";
+import { preferredFeaturesSchema } from "../reservations/preferred-features";
 
 const emptyToUndefined = (value: unknown) => {
   if (value === null || value === undefined) return undefined;
@@ -52,7 +53,8 @@ const quoteSchema = z.object({
   serviceDate: requiredString,
   serviceTime: z.preprocess(emptyToUndefined, z.string().regex(/^\d{2}:\d{2}$/).optional()),
   turn: optionalTurn,
-  preferredZone: optionalString
+  preferredZone: optionalString,
+  preferredFeatures: preferredFeaturesSchema
 }).refine((value) => value.serviceTime || value.turn, {
   message: "serviceTime or turn is required"
 });
@@ -69,6 +71,7 @@ const externalReservationSchema = z.object({
   serviceTime: z.preprocess(emptyToUndefined, z.string().regex(/^\d{2}:\d{2}$/).optional()),
   turn: optionalTurn,
   preferredZone: optionalString,
+  preferredFeatures: preferredFeaturesSchema,
   preferredTags: preferredTagsSchema,
   birthday: optionalString,
   notes: optionalString

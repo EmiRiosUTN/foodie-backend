@@ -16,6 +16,7 @@ type LayoutFixedItem = {
 type TableMetadata = {
   manualFeatures?: {
     hasTvView?: boolean;
+    hasWindowView?: boolean;
   };
   capacity?: {
     minPartySize?: number;
@@ -69,7 +70,8 @@ export class FloorPlansService {
 
     return {
       manualFeatures: {
-        hasTvView: Boolean(source.manualFeatures?.hasTvView)
+        hasTvView: Boolean(source.manualFeatures?.hasTvView),
+        hasWindowView: Boolean(source.manualFeatures?.hasWindowView)
       },
       capacity: {
         minPartySize: source.capacity?.minPartySize,
@@ -410,4 +412,3 @@ export class FloorPlansService {
     return result;
   }
 }
-

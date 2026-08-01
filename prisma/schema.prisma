@@ -279,6 +279,7 @@ model Reservation {
   serviceTime    String              @default("20:00")
   preferredZone  String?
   notes          String?
+  metadata       Json?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
   restaurant     Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
@@ -425,4 +426,3 @@ model AuditLog {
   @@index([platformUserId, createdAt])
   @@index([restaurantUserId, createdAt])
 }
-

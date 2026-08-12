@@ -18,9 +18,9 @@ export class TablesService {
     return user.restaurantId;
   }
 
-  listStates(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
+  async listStates(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
     const restaurantId = this.restaurantScope(user);
-    return this.prisma.serviceState.findMany({
+    const states = await this.prisma.serviceState.findMany({
       where: {
         restaurantId,
         branchId: input.branchId,
@@ -28,6 +28,12 @@ export class TablesService {
         turn: input.turn
       }
     });
+    const priority = { free: 0, reserved: 1, occupied: 2, blocked: 3 };
+    return [...states.reduce((byTable, state) => {
+      const previous = byTable.get(state.tableId);
+      if (!previous || priority[state.status] >= priority[previous.status]) byTable.set(state.tableId, state);
+      return byTable;
+    }, new Map<string, (typeof states)[number]>()).values()];
   }
 
   async setState(
@@ -57,15 +63,14 @@ export class TablesService {
 
     const state = await this.prisma.serviceState.upsert({
       where: {
-        tableId_serviceDate_turn: {
+        tableId_reservationId: {
           tableId: input.tableId,
-          serviceDate: new Date(input.serviceDate),
-          turn: input.turn
+          reservationId: input.reservationId || `manual:${input.serviceDate}:${input.turn}`
         }
       },
       update: {
         status: input.status,
-        reservationId: input.reservationId || null,
+        reservationId: input.reservationId || `manual:${input.serviceDate}:${input.turn}`,
         roomId: input.roomId,
         branchId: input.branchId
       },
@@ -74,7 +79,7 @@ export class TablesService {
         branchId: input.branchId,
         roomId: input.roomId,
         tableId: input.tableId,
-        reservationId: input.reservationId || null,
+        reservationId: input.reservationId || `manual:${input.serviceDate}:${input.turn}`,
         serviceDate: new Date(input.serviceDate),
         turn: input.turn,
         status: input.status

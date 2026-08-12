@@ -5,7 +5,7 @@ import type { RequestUser } from "../../common/auth/request-user";
 import { createReservationCode } from "../../common/utils/code";
 import { RealtimeService } from "../realtime/realtime.service";
 import { AuditService } from "../audit/audit.service";
-import { Prisma, ReservationStatus } from "@prisma/client";
+import { Prisma, ReservationSource, ReservationStatus } from "@prisma/client";
 import { getSharedTableFeatures, tableMatchesPreferredFeatures, type PreferredFeature } from "./preferred-features";
 
 @Injectable()
@@ -144,6 +144,7 @@ export class ReservationsService {
       preferredTags?: string[];
       birthday?: string;
       notes?: string;
+      durationMinutes?: number;
     }
   ) {
     const restaurantId = this.restaurantScope(user);
@@ -167,8 +168,9 @@ export class ReservationsService {
       preferredTags?: string[];
       birthday?: string;
       notes?: string;
+      durationMinutes?: number;
     },
-    options?: { actorUserId?: string; idempotencyKey?: string }
+    options?: { actorUserId?: string; idempotencyKey?: string; source?: ReservationSource }
   ) {
     const room = await this.prisma.room.findFirst({
       where: { id: input.roomId, restaurantId, branchId: input.branchId, isActive: true },
@@ -184,6 +186,7 @@ export class ReservationsService {
     }
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
+    const durationMinutes = input.durationMinutes || 180;
 
     const preferredFeatures = input.preferredFeatures || [];
     const requestedAssignment = await this.assignTables(this.prisma, {
@@ -194,6 +197,7 @@ export class ReservationsService {
       partySize: input.partySize,
       preferredZone: input.preferredZone,
       preferredFeatures
+      , serviceTime, durationMinutes
     });
 
     if (!requestedAssignment) {
@@ -205,6 +209,7 @@ export class ReservationsService {
             turn,
             partySize: input.partySize,
             preferredZone: input.preferredZone
+            , serviceTime, durationMinutes
           })
         : null;
       if (preferredFeatures.length) {
@@ -219,6 +224,9 @@ export class ReservationsService {
     }
 
     const reservation = await this.prisma.$transaction(async (tx) => {
+      // Serializes assignment attempts within a room. This prevents two public
+      // requests from both seeing the same last table before either commits.
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Table" WHERE "roomId" = ${input.roomId} FOR UPDATE`);
       const assignment = await this.assignTables(tx, {
         restaurantId,
         roomId: input.roomId,
@@ -226,7 +234,9 @@ export class ReservationsService {
         turn,
         partySize: input.partySize,
         preferredZone: input.preferredZone,
-        preferredFeatures
+        preferredFeatures,
+        serviceTime,
+        durationMinutes
       });
       if (!assignment) {
         const generalAssignment = preferredFeatures.length
@@ -236,7 +246,9 @@ export class ReservationsService {
               serviceDate,
               turn,
               partySize: input.partySize,
-              preferredZone: input.preferredZone
+              preferredZone: input.preferredZone,
+              serviceTime,
+              durationMinutes
             })
           : null;
         if (preferredFeatures.length) {
@@ -273,6 +285,8 @@ export class ReservationsService {
           serviceTime,
           preferredZone: input.preferredZone,
           notes: input.notes,
+          source: options?.source || "admin",
+          durationMinutes,
           metadata: {
             seatingPreference: {
               requestedFeatures: preferredFeatures,
@@ -299,10 +313,9 @@ export class ReservationsService {
         assignment.tableIds.map((tableId) =>
           tx.serviceState.upsert({
             where: {
-              tableId_serviceDate_turn: {
+              tableId_reservationId: {
                 tableId,
-                serviceDate,
-                turn
+                reservationId: created.id
               }
             },
             update: {
@@ -347,6 +360,43 @@ export class ReservationsService {
     });
 
     return reservation;
+  }
+
+  private timeToMinutes(serviceTime: string) {
+    const [hours, minutes] = serviceTime.split(":").map(Number);
+    return hours * 60 + minutes;
+  }
+
+  async findAvailableRoomForRestaurant(input: {
+    restaurantId: string;
+    branchId: string;
+    partySize: number;
+    serviceDate: string;
+    serviceTime: string;
+    preferredFeatures?: PreferredFeature[];
+    durationMinutes?: number;
+  }) {
+    const serviceDate = new Date(input.serviceDate);
+    if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
+    const serviceTime = this.normalizeServiceTime(input.serviceTime);
+    const turn = this.deriveTurnFromServiceTime(serviceTime);
+    const rooms = await this.prisma.room.findMany({
+      where: { restaurantId: input.restaurantId, branchId: input.branchId, isActive: true },
+      orderBy: { createdAt: "asc" }
+    });
+    for (const room of rooms) {
+      const assignment = await this.assignTables(this.prisma, {
+        restaurantId: input.restaurantId,
+        roomId: room.id,
+        serviceDate,
+        turn,
+        partySize: input.partySize,
+        preferredFeatures: input.preferredFeatures || []
+        , serviceTime, durationMinutes: input.durationMinutes || 180
+      });
+      if (assignment) return { roomId: room.id, serviceTime, turn };
+    }
+    return null;
   }
 
   async moveToState(user: RequestUser, reservationId: string, next: "seated" | "completed") {
@@ -397,10 +447,9 @@ export class ReservationsService {
         reservation.tables.map((item) =>
           tx.serviceState.upsert({
             where: {
-              tableId_serviceDate_turn: {
+              tableId_reservationId: {
                 tableId: item.tableId,
-                serviceDate: reservation.serviceDate,
-                turn: reservation.turn
+                reservationId: reservation.id
               }
             },
             update: {
@@ -749,10 +798,9 @@ export class ReservationsService {
         assignment.tableIds.map((tableId) =>
           tx.serviceState.upsert({
             where: {
-              tableId_serviceDate_turn: {
+              tableId_reservationId: {
                 tableId,
-                serviceDate: nextServiceDate,
-                turn: nextTurn
+                reservationId: reservation.id
               }
             },
             update: {
@@ -811,6 +859,8 @@ export class ReservationsService {
       preferredZone?: string;
       preferredFeatures?: PreferredFeature[];
       excludeReservationId?: string;
+      serviceTime?: string;
+      durationMinutes?: number;
     }
   ) {
     const roomTables = await client.table.findMany({
@@ -822,20 +872,25 @@ export class ReservationsService {
       }
     });
 
-    const takenIds = new Set(
-      (
-        await client.serviceState.findMany({
-          where: {
-            restaurantId: input.restaurantId,
-            roomId: input.roomId,
-            serviceDate: input.serviceDate,
-            turn: input.turn,
-            status: { in: ["reserved", "occupied", "blocked"] },
-            ...(input.excludeReservationId ? { NOT: { reservationId: input.excludeReservationId } } : {})
-          }
-        })
-      ).map((item) => item.tableId)
-    );
+    const requestedStart = this.timeToMinutes(input.serviceTime || "20:00");
+    const requestedEnd = requestedStart + (input.durationMinutes || 180);
+    const reservations = await client.reservation.findMany({
+      where: {
+        restaurantId: input.restaurantId,
+        roomId: input.roomId,
+        serviceDate: input.serviceDate,
+        status: { notIn: ["cancelled", "completed", "no_show"] },
+        ...(input.excludeReservationId ? { NOT: { id: input.excludeReservationId } } : {})
+      },
+      select: { serviceTime: true, durationMinutes: true, tables: { select: { tableId: true } } }
+    });
+    const takenIds = new Set(reservations.flatMap((reservation) => {
+      const start = this.timeToMinutes(reservation.serviceTime);
+      const overlaps = requestedStart < start + reservation.durationMinutes && start < requestedEnd;
+      return overlaps ? reservation.tables.map((item) => item.tableId) : [];
+    }));
+    const blockedIds = await client.serviceState.findMany({ where: { restaurantId: input.restaurantId, roomId: input.roomId, serviceDate: input.serviceDate, turn: input.turn, status: "blocked" }, select: { tableId: true } });
+    blockedIds.forEach((item) => takenIds.add(item.tableId));
 
     const preferredFeatures = input.preferredFeatures || [];
     const availableTables = roomTables

@@ -10,6 +10,7 @@ import { RealtimeModule } from "./realtime/realtime.module";
 import { ReservationsModule } from "./reservations/reservations.module";
 import { RestaurantsModule } from "./restaurants/restaurants.module";
 import { TablesModule } from "./tables/tables.module";
+import { OnlineBookingsModule } from "./online-bookings/online-bookings.module";
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { TablesModule } from "./tables/tables.module";
     CustomersModule,
     RealtimeModule,
     IntegrationsModule,
+    OnlineBookingsModule,
     AuditModule
   ]
 })

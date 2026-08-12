@@ -206,7 +206,7 @@ export class IntegrationsService {
       const created = await this.reservationsService.createReservationForRestaurant(
         token.restaurantId,
         reservationInput,
-        { idempotencyKey }
+        { idempotencyKey, source: "integration" }
       );
       const metadata = created.metadata && typeof created.metadata === "object" && !Array.isArray(created.metadata)
         ? created.metadata as {

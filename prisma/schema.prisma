@@ -52,6 +52,12 @@ enum ExternalRequestStatus {
   error
 }
 
+enum ReservationSource {
+  admin
+  integration
+  public_web
+}
+
 model PlatformUser {
   id           String   @id @default(cuid())
   fullName     String
@@ -95,6 +101,7 @@ model Restaurant {
   externalApiRequests ExternalApiRequest[]
   auditLogs         AuditLog[]
   chatActivityLogs  ChatActivityLog[]
+  onlineBooking     OnlineBookingSettings?
 }
 
 model RestaurantUser {
@@ -123,6 +130,8 @@ model Branch {
   id           String        @id @default(cuid())
   restaurantId String
   name         String
+  publicSlug   String        @unique @default(cuid())
+  onlineBookingDurationMinutes Int @default(180)
   timezone     String
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -130,6 +139,8 @@ model Branch {
   rooms        Room[]
   customers    Customer[]
   reservations Reservation[]
+  onlineBookingSchedules OnlineBookingSchedule[]
+  onlineBookingExceptions OnlineBookingException[]
 
   @@index([restaurantId])
 }
@@ -251,6 +262,56 @@ model Customer {
   @@unique([restaurantId, email])
 }
 
+model OnlineBookingSettings {
+  id                String   @id @default(cuid())
+  restaurantId      String   @unique
+  isEnabled         Boolean  @default(false)
+  coverImageUrl     String?
+  whatsappPhone     String?
+  accentColor       String   @default("#FF5A00")
+  minAdvanceMinutes Int      @default(60)
+  maxAdvanceDays    Int      @default(60)
+  minPartySize      Int      @default(1)
+  maxPartySize      Int      @default(12)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  restaurant        Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+model OnlineBookingSchedule {
+  id           String   @id @default(cuid())
+  restaurantId String
+  branchId     String
+  weekday      Int
+  isEnabled    Boolean  @default(true)
+  startTime    String
+  endTime      String
+  intervalMin  Int      @default(30)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  branch       Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, weekday])
+  @@index([restaurantId, branchId])
+}
+
+model OnlineBookingException {
+  id           String   @id @default(cuid())
+  restaurantId String
+  branchId     String
+  serviceDate  DateTime
+  isClosed     Boolean  @default(false)
+  startTime    String?
+  endTime      String?
+  intervalMin  Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  branch       Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, serviceDate])
+  @@index([restaurantId, branchId, serviceDate])
+}
+
 model CustomerTag {
   id          String   @id @default(cuid())
   customerId   String
@@ -279,6 +340,8 @@ model Reservation {
   serviceTime    String              @default("20:00")
   preferredZone  String?
   notes          String?
+  source         ReservationSource   @default(admin)
+  durationMinutes Int                @default(180)
   metadata       Json?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
@@ -317,7 +380,7 @@ model ServiceState {
   restaurant    Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   table         Table            @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
-  @@unique([tableId, serviceDate, turn])
+  @@unique([tableId, reservationId])
   @@index([restaurantId, branchId, roomId, serviceDate, turn])
   @@index([tableId, serviceDate, turn])
 }

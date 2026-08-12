@@ -155,8 +155,6 @@ export class RestaurantsService {
           name: input.restaurantName,
           slug: input.slug,
           profileImageUrl: input.profileImageUrl || null,
-          chatAuthEmail: input.ownerEmail,
-          chatAuthSecret: encryptSecret(input.ownerPassword),
           branches: {
             create: {
               name: input.branchName,
@@ -416,6 +414,33 @@ export class RestaurantsService {
     return this.removeRestaurantUser(restaurantId, userId, actor);
   }
 
+  async configureChatAuth(
+    restaurantId: string,
+    input: { email: string; password: string },
+    actor: RequestUser
+  ) {
+    const restaurant = await this.prisma.restaurant.findUnique({ where: { id: restaurantId } });
+    if (!restaurant) throw new NotFoundException("Restaurant not found");
+
+    await this.prisma.restaurant.update({
+      where: { id: restaurantId },
+      data: {
+        chatAuthEmail: input.email.trim().toLowerCase(),
+        chatAuthSecret: encryptSecret(input.password)
+      }
+    });
+
+    await this.auditService.log({
+      action: "restaurant.chat_auth.configured",
+      targetType: "restaurant",
+      targetId: restaurantId,
+      restaurantId,
+      platformUserId: actor.scope === "platform" ? actor.sub : null,
+      restaurantUserId: actor.scope === "restaurant" ? actor.sub : null
+    });
+
+    return { configured: true };
+  }
   async createRestaurantUser(
     restaurantId: string,
     input: { fullName: string; email: string; password: string; role: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen" },
@@ -448,15 +473,6 @@ export class RestaurantsService {
       }
     });
 
-    if (input.role === "restaurant_owner") {
-      await this.prisma.restaurant.update({
-        where: { id: restaurantId },
-        data: {
-          chatAuthEmail: input.email,
-          chatAuthSecret: encryptSecret(input.password)
-        }
-      });
-    }
 
     await this.auditService.log({
       action: "restaurant_user.created",
@@ -539,22 +555,6 @@ export class RestaurantsService {
       }
     });
 
-    if (nextRole === "restaurant_owner" && input.password) {
-      await this.prisma.restaurant.update({
-        where: { id: restaurantId },
-        data: {
-          chatAuthEmail: nextEmail,
-          chatAuthSecret: encryptSecret(input.password)
-        }
-      });
-    } else if (existingUser.role === "restaurant_owner" && input.email && !input.password) {
-      await this.prisma.restaurant.update({
-        where: { id: restaurantId },
-        data: {
-          chatAuthEmail: input.email
-        }
-      });
-    }
 
     await this.auditService.log({
       action: "restaurant_user.updated",
@@ -666,4 +666,3 @@ export class RestaurantsService {
     };
   }
 }
-

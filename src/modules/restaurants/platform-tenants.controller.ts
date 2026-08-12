@@ -32,6 +32,10 @@ const updateRestaurantUserSchema = z
 const rotateTokenSchema = z.object({
   label: z.string().min(2)
 });
+const chatAuthSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(4)
+});
 
 @Controller("platform/restaurants/:restaurantId")
 @Roles("platform_admin")
@@ -85,6 +89,14 @@ export class PlatformTenantsController {
     return this.restaurantsService.removeRestaurantUser(restaurantId, userId, user);
   }
 
+  @Patch("chat-auth")
+  configureChatAuth(
+    @Param("restaurantId") restaurantId: string,
+    @Body() body: unknown,
+    @CurrentUser() user: RequestUser
+  ) {
+    return this.restaurantsService.configureChatAuth(restaurantId, chatAuthSchema.parse(body), user);
+  }
   @Post("integration-tokens/rotate")
   rotateToken(
     @Param("restaurantId") restaurantId: string,

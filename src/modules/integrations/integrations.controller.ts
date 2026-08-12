@@ -122,6 +122,18 @@ export class IntegrationsController {
   }
 
   @Public()
+  @Get("external/restaurant-profile")
+  restaurantProfile(@Headers("x-api-key") apiKey: string) {
+    return this.integrationsService.getExternalRestaurantProfile(apiKey);
+  }
+
+  @Public()
+  @Get("external/assistant/context")
+  assistantContext(@Headers("x-api-key") apiKey: string) {
+    return this.integrationsService.getAssistantContext(apiKey);
+  }
+
+  @Public()
   @Get("external/rooms")
   listExternalRooms(
     @Headers("x-api-key") apiKey: string,

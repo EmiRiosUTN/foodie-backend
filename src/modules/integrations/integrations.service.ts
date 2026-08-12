@@ -9,6 +9,7 @@ import { createRequestHash } from "../../common/utils/code";
 import { AuditService } from "../audit/audit.service";
 import { hashOpaqueToken } from "../../common/security/token-hash";
 import type { PreferredFeature } from "../reservations/preferred-features";
+import { compileAssistantSystemMessage, FOODIE_CORE_PROMPT_VERSION } from "./core-prompt";
 
 type ResolvedIntegrationToken = {
   id: string;
@@ -27,6 +28,62 @@ export class IntegrationsService {
 
   recentEvents() {
     return this.realtimeService.recent();
+  }
+
+  async getExternalRestaurantProfile(apiKey: string) {
+    const token = await this.resolveToken(apiKey);
+    if (!token) throw new ForbiddenException("Invalid API key");
+    await this.consumeRateLimit(token.restaurantId);
+    const now = new Date();
+    const restaurant = await this.prisma.restaurant.findUniqueOrThrow({
+      where: { id: token.restaurantId },
+      include: {
+        customization: true,
+        onlineBooking: true,
+        specials: { where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } }, orderBy: [{ startsAt: "asc" }, { title: "asc" }] },
+        branches: {
+          include: {
+            onlineBookingSchedules: { where: { isEnabled: true }, orderBy: { weekday: "asc" } },
+            onlineBookingExceptions: { where: { serviceDate: { gte: new Date(now.toISOString().slice(0, 10)) } }, orderBy: { serviceDate: "asc" } }
+          },
+          orderBy: { createdAt: "asc" }
+        }
+      }
+    });
+    await this.prisma.integrationToken.update({ where: { id: token.id }, data: { lastUsedAt: now } });
+    const booking = restaurant.onlineBooking;
+    return {
+      restaurant: { name: restaurant.name, slug: restaurant.slug, description: restaurant.customization?.description || null, address: restaurant.customization?.address || null, mapsUrl: restaurant.customization?.mapsUrl || null, menuUrl: restaurant.customization?.menuUrl || null, whatsappPhone: booking?.whatsappPhone || null },
+      specials: restaurant.specials.map((special) => ({ title: special.title, description: special.description, price: special.price ? Number(special.price) : null, imageUrl: special.imageUrl, externalUrl: special.externalUrl, startsAt: special.startsAt.toISOString().slice(0, 10), endsAt: special.endsAt.toISOString().slice(0, 10) })),
+      reservationPolicy: { isEnabled: booking?.isEnabled || false, minAdvanceMinutes: booking?.minAdvanceMinutes || 60, maxAdvanceDays: booking?.maxAdvanceDays || 60, minPartySize: booking?.minPartySize || 1, maxPartySize: booking?.maxPartySize || 12 },
+      branches: restaurant.branches.map((branch) => ({ id: branch.id, name: branch.name, timezone: branch.timezone, durationMinutes: branch.onlineBookingDurationMinutes, schedules: branch.onlineBookingSchedules.map((schedule) => ({ weekday: schedule.weekday, startTime: schedule.startTime, endTime: schedule.endTime, intervalMin: schedule.intervalMin })), exceptions: branch.onlineBookingExceptions.map((exception) => ({ serviceDate: exception.serviceDate.toISOString().slice(0, 10), isClosed: exception.isClosed, startTime: exception.startTime, endTime: exception.endTime, intervalMin: exception.intervalMin })) }))
+    };
+  }
+
+  async getAssistantContext(apiKey: string) {
+    const token = await this.resolveToken(apiKey);
+    if (!token) throw new ForbiddenException("Invalid API key");
+    await this.consumeRateLimit(token.restaurantId);
+    const now = new Date();
+    const restaurant = await this.prisma.restaurant.findUniqueOrThrow({
+      where: { id: token.restaurantId },
+      include: {
+        customization: true, onlineBooking: true,
+        specials: { where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } }, orderBy: { title: "asc" } },
+        bookingCutoffs: true,
+        branches: { where: { isEnabled: true }, include: { bookingWindows: { where: { isEnabled: true }, orderBy: [{ weekday: "asc" }, { service: "asc" }] }, bookingExceptions: { where: { serviceDate: { gte: new Date(now.toISOString().slice(0, 10)) } }, orderBy: { serviceDate: "asc" } }, rooms: { where: { isActive: true }, select: { name: true, description: true, isOutdoor: true } } }, orderBy: { createdAt: "asc" } }
+      }
+    });
+    const c = restaurant.customization; const b = restaurant.onlineBooking;
+    const context = {
+      restaurant: { name: restaurant.name, slug: restaurant.slug, description: c?.description || null, cuisineType: c?.cuisineType || null, address: c?.address || null, city: c?.city || null, province: c?.province || null, country: c?.country || null, phone: c?.phone || null, whatsapp: c?.humanSupportWhatsapp || b?.whatsappPhone || null, email: c?.email || null, websiteUrl: c?.websiteUrl || null, instagramUrl: c?.instagramUrl || null, googleMapsUrl: c?.mapsUrl || null, menuUrl: c?.menuUrl || null },
+      assistant: { enabled: c?.assistantEnabled ?? true, name: c?.assistantName || null, role: c?.assistantRole || "asistente virtual", locale: c?.assistantLocale || "es-AR", tone: c?.assistantTone || "calido_breve_profesional", firstGreeting: c?.assistantFirstGreeting || null, disclosure: c?.assistantDisclosure ?? true, humanSupport: { phone: c?.humanSupportPhone || c?.phone || null, whatsapp: c?.humanSupportWhatsapp || b?.whatsappPhone || null, email: c?.humanSupportEmail || c?.email || null } },
+      reservationPolicy: { publicBookingEnabled: b?.isEnabled || false, minimumAdvanceMinutes: b?.minAdvanceMinutes || 60, maximumAdvance: { value: b?.maximumAdvanceValue || b?.maxAdvanceDays || 60, unit: b?.maximumAdvanceUnit || "days" }, onlinePartySize: { min: b?.minPartySize || 1, max: b?.maxPartySize || 12 }, largePartyThreshold: b?.largePartyThreshold || null, largePartyAction: b?.largePartyThreshold ? "whatsapp" : null, cutoffRules: restaurant.bookingCutoffs.map((rule) => ({ service: rule.service, weekdays: rule.weekdays, minimumAdvanceMinutes: rule.minimumAdvanceMinutes, sameDayOnly: rule.sameDayOnly, fallbackAction: rule.fallbackAction })) },
+      branches: restaurant.branches.map((branch) => ({ name: branch.publicName || branch.name, timezone: branch.timezone, publicBookingEnabled: branch.publicBookingEnabled, address: branch.address || c?.address || null, contact: { phone: branch.phone || c?.phone || null, whatsapp: branch.whatsappPhone || c?.humanSupportWhatsapp || b?.whatsappPhone || null }, durationMinutes: branch.onlineBookingDurationMinutes, bookingWindows: branch.bookingWindows.map((window) => ({ weekday: window.weekday, service: window.service, startTime: window.startTime, endTime: window.endTime, intervalMinutes: window.intervalMin })), exceptions: branch.bookingExceptions.map((exception) => ({ date: exception.serviceDate.toISOString().slice(0, 10), type: exception.type, windows: exception.windows })), rooms: branch.rooms })),
+      specials: restaurant.specials.map((special) => ({ name: special.title, description: special.description, price: special.price ? Number(special.price) : null, validFrom: special.startsAt.toISOString().slice(0, 10), validUntil: special.endsAt.toISOString().slice(0, 10) }))
+    };
+    await this.prisma.integrationToken.update({ where: { id: token.id }, data: { lastUsedAt: now } });
+    return { configVersion: c?.configVersion || 1, updatedAt: c?.updatedAt || restaurant.updatedAt, corePromptVersion: FOODIE_CORE_PROMPT_VERSION, context, systemMessage: compileAssistantSystemMessage(context) };
   }
 
   async listExternalRooms(apiKey: string, input: { restaurantId?: string; branchId?: string }) {

@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { hashPassword } from "../../common/security/password";
-import { encryptSecret } from "../../common/security/encrypted-secret";
+import { decryptSecret, encryptSecret } from "../../common/security/encrypted-secret";
 import { hashOpaqueToken } from "../../common/security/token-hash";
 import { createApiToken } from "../../common/utils/code";
 import { AuditService } from "../audit/audit.service";
@@ -26,7 +26,7 @@ export class RestaurantsService {
           select: { id: true, fullName: true, email: true, role: true, isActive: true }
         },
         integrationTokens: {
-          select: { id: true, label: true, isActive: true, createdAt: true }
+          select: { id: true, label: true, isActive: true, createdAt: true, encryptedToken: true }
         },
         _count: {
           select: {
@@ -55,6 +55,7 @@ export class RestaurantsService {
 
     return restaurants.map((restaurant) => ({
       ...restaurant,
+      integrationTokens: restaurant.integrationTokens.map(({ encryptedToken, ...token }) => ({ ...token, apiKey: encryptedToken ? decryptSecret(encryptedToken) : null })),
       branches: restaurant.branches.map((branch) => ({
         ...branch,
         rooms: roomsByBranchId[branch.id] || []
@@ -74,7 +75,7 @@ export class RestaurantsService {
           orderBy: { createdAt: "asc" }
         },
         integrationTokens: {
-          select: { id: true, label: true, isActive: true, lastUsedAt: true, createdAt: true },
+          select: { id: true, label: true, isActive: true, lastUsedAt: true, createdAt: true, encryptedToken: true },
           orderBy: { createdAt: "desc" }
         },
         _count: {
@@ -99,6 +100,7 @@ export class RestaurantsService {
 
     return {
       ...restaurant,
+      integrationTokens: restaurant.integrationTokens.map(({ encryptedToken, ...token }) => ({ ...token, apiKey: encryptedToken ? decryptSecret(encryptedToken) : null })),
       branches: restaurant.branches.map((branch) => ({
         ...branch,
         rooms: roomsByBranchId[branch.id] || []
@@ -172,7 +174,8 @@ export class RestaurantsService {
           integrationTokens: {
             create: {
               label: "Default AI reservation token",
-              tokenHash
+              tokenHash,
+              encryptedToken: encryptSecret(rawApiToken)
             }
           }
         },
@@ -636,7 +639,8 @@ export class RestaurantsService {
         data: {
           restaurantId,
           label: input.label,
-          tokenHash
+          tokenHash,
+          encryptedToken: encryptSecret(rawApiToken)
         },
         select: {
           id: true,

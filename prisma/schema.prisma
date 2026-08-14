@@ -575,6 +575,7 @@ model IntegrationToken {
   restaurantId  String
   label         String
   tokenHash     String
+  encryptedToken String?
   isActive      Boolean  @default(true)
   lastUsedAt    DateTime?
   createdAt     DateTime @default(now())

@@ -76,6 +76,20 @@ enum BookingExceptionType {
   booking_disabled
 }
 
+enum AssistantUpdateCategory {
+  menu
+  hours
+  event
+  promotion
+  general
+}
+
+enum AssistantUpdateValidity {
+  indefinite
+  single_date
+  range
+}
+
 model PlatformUser {
   id           String   @id @default(cuid())
   fullName     String
@@ -122,6 +136,8 @@ model Restaurant {
   onlineBooking     OnlineBookingSettings?
   customization     RestaurantCustomization?
   specials          RestaurantSpecial[]
+  faqs              RestaurantFaq[]
+  assistantUpdates  RestaurantAssistantUpdate[]
   bookingWindows    BookingWindow[]
   bookingCutoffs    BookingCutoffRule[]
   bookingExceptions BookingException[]
@@ -173,6 +189,40 @@ model RestaurantSpecial {
   updatedAt   DateTime @updatedAt
   restaurant  Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
+  @@index([restaurantId, isActive, startsAt, endsAt])
+}
+
+model RestaurantFaq {
+  id           String     @id @default(cuid())
+  restaurantId String
+  topic        String
+  question     String
+  answer       String
+  isActive     Boolean    @default(true)
+  position     Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, isActive, position])
+}
+
+model RestaurantAssistantUpdate {
+  id           String                  @id @default(cuid())
+  restaurantId String
+  title        String
+  category     AssistantUpdateCategory @default(general)
+  content      String
+  isActive     Boolean                 @default(true)
+  validityType AssistantUpdateValidity @default(indefinite)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  position     Int                     @default(0)
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+  restaurant   Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, isActive, position])
   @@index([restaurantId, isActive, startsAt, endsAt])
 }
 
@@ -357,6 +407,10 @@ model OnlineBookingSettings {
   minPartySize      Int      @default(1)
   maxPartySize      Int      @default(12)
   largePartyThreshold Int?
+  agencyPartyThreshold Int?
+  remindersEnabled   Boolean  @default(false)
+  reminderPartySizeFrom Int?
+  reminderHoursBefore Int?
   showAddress       Boolean @default(false)
   showPhone         Boolean @default(false)
   showMenu          Boolean @default(false)

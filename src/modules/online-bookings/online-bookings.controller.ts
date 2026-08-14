@@ -10,11 +10,11 @@ const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const configSchema = z.object({
   isEnabled: z.boolean(), coverImageUrl: z.string().url().max(1000).nullable().optional(), whatsappPhone: z.string().trim().regex(/^\+?[0-9\s()\-]{7,30}$/).nullable().optional(),
   accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/), minAdvanceMinutes: z.number().int().min(0).max(10080),
-  maxAdvanceDays: z.number().int().min(1).max(365), minPartySize: z.number().int().min(1).max(100), maxPartySize: z.number().int().min(1).max(100),
+  maxAdvanceDays: z.number().int().min(1).max(365), minPartySize: z.number().int().min(1).max(100), maxPartySize: z.number().int().min(1).max(100), largePartyThreshold: z.number().int().min(1).max(1000).nullable().optional(), agencyPartyThreshold: z.number().int().min(1).max(1000).nullable().optional(), remindersEnabled: z.boolean().optional().default(false), reminderPartySizeFrom: z.number().int().min(1).max(1000).nullable().optional(), reminderHoursBefore: z.number().int().min(1).max(720).nullable().optional(),
   branchDurations: z.array(z.object({ branchId: z.string().min(1), durationMinutes: z.number().int().min(15).max(720) })).max(100).optional(),
-  schedules: z.array(z.object({ branchId: z.string().min(1), weekday: z.number().int().min(0).max(6), isEnabled: z.boolean(), startTime: clock, endTime: clock, intervalMin: z.number().int().min(5).max(180) })).max(70),
+  bookingWindows: z.array(z.object({ branchId: z.string().min(1), weekday: z.number().int().min(0).max(6), service: z.enum(["lunch", "dinner"]), isEnabled: z.boolean(), startTime: clock, endTime: clock, intervalMin: z.number().int().min(5).max(180) })).max(140),
   exceptions: z.array(z.object({ branchId: z.string().min(1), serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), isClosed: z.boolean(), startTime: clock.optional(), endTime: clock.optional(), intervalMin: z.number().int().min(5).max(180).optional() })).max(365)
-}).refine((value) => value.maxPartySize >= value.minPartySize, "Invalid party size range");
+}).refine((value) => value.maxPartySize >= value.minPartySize, "Invalid party size range").refine((value) => !value.remindersEnabled || (value.reminderPartySizeFrom && value.reminderHoursBefore), "Reminder configuration is required when reminders are enabled").refine((value) => new Set(value.bookingWindows.map((item) => `${item.branchId}:${item.weekday}:${item.service}`)).size === value.bookingWindows.length, "Only one lunch and one dinner window are allowed per day");
 
 const publicFeaturesSchema = z.preprocess((value) => typeof value === "string" && value ? value.split(",") : value, preferredFeaturesSchema.optional().default([]));
 const availabilitySchema = z.object({ branch: z.string().min(1), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), partySize: z.coerce.number().int().min(1).max(100), preferredFeatures: publicFeaturesSchema });

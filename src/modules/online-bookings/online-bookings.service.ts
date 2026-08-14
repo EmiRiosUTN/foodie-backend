@@ -43,8 +43,8 @@ export class OnlineBookingsService {
       const windows = Array.isArray(exception.windows) ? exception.windows : [];
       return windows.filter((item): item is { startTime: string; endTime: string; intervalMin?: number; service?: "lunch" | "dinner" } => Boolean(item && typeof item === "object" && "startTime" in item && "endTime" in item)).map((item) => ({ isEnabled: true, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin || 30, service: item.service }));
     }
-    const windows = await this.prisma.bookingWindow.findMany({ where: { restaurantId, branchId, weekday: weekday(date, timezone), isEnabled: true }, orderBy: [{ service: "asc" }, { startTime: "asc" }] });
-    if (windows.length) return windows;
+    const windows = await this.prisma.bookingWindow.findMany({ where: { restaurantId, branchId, weekday: weekday(date, timezone) }, orderBy: [{ service: "asc" }, { startTime: "asc" }] });
+    if (windows.length) return windows.filter((window) => window.isEnabled);
     const legacy = await this.prisma.onlineBookingException.findFirst({ where: { restaurantId, branchId, serviceDate: serviceDate(date) } });
     if (legacy) return legacy.isClosed || !legacy.startTime || !legacy.endTime || !legacy.intervalMin ? [] : [{ isEnabled: true, startTime: legacy.startTime, endTime: legacy.endTime, intervalMin: legacy.intervalMin }];
     const legacySchedule = await this.prisma.onlineBookingSchedule.findFirst({ where: { restaurantId, branchId, weekday: weekday(date, timezone), isEnabled: true } });
@@ -82,31 +82,31 @@ export class OnlineBookingsService {
 
   async getOwnerConfig(user: RequestUser) {
     const restaurantId = this.assertOwner(user);
-    const [restaurant, settings, schedules, exceptions] = await Promise.all([
+    const [restaurant, settings, bookingWindows, legacySchedules, exceptions] = await Promise.all([
       this.prisma.restaurant.findUniqueOrThrow({ where: { id: restaurantId }, select: { name: true, slug: true, profileImageUrl: true, branches: { select: { id: true, name: true, publicSlug: true, timezone: true, onlineBookingDurationMinutes: true }, orderBy: { createdAt: "asc" } } } }),
       this.prisma.onlineBookingSettings.findUnique({ where: { restaurantId } }),
+      this.prisma.bookingWindow.findMany({ where: { restaurantId }, orderBy: [{ branchId: "asc" }, { weekday: "asc" }, { service: "asc" }] }),
       this.prisma.onlineBookingSchedule.findMany({ where: { restaurantId }, orderBy: [{ branchId: "asc" }, { weekday: "asc" }] }),
       this.prisma.onlineBookingException.findMany({ where: { restaurantId }, orderBy: { serviceDate: "asc" } })
     ]);
-    return { restaurant, settings: settings || { isEnabled: false, coverImageUrl: null, whatsappPhone: null, accentColor: "#FF5A00", minAdvanceMinutes: 60, maxAdvanceDays: 60, minPartySize: 1, maxPartySize: 12 }, schedules, exceptions: exceptions.map((item) => ({ ...item, serviceDate: item.serviceDate.toISOString().slice(0, 10) })) };
+    const windows = bookingWindows.length ? bookingWindows : legacySchedules.map((schedule) => ({ ...schedule, service: timeToMinutes(schedule.startTime) < 17 * 60 ? "lunch" as const : "dinner" as const }));
+    return { restaurant, settings: settings || { isEnabled: false, coverImageUrl: null, whatsappPhone: null, accentColor: "#FF5A00", minAdvanceMinutes: 60, maxAdvanceDays: 60, minPartySize: 1, maxPartySize: 12, largePartyThreshold: null, agencyPartyThreshold: null, remindersEnabled: false, reminderPartySizeFrom: null, reminderHoursBefore: null }, bookingWindows: windows, exceptions: exceptions.map((item) => ({ ...item, serviceDate: item.serviceDate.toISOString().slice(0, 10) })) };
   }
 
-  async saveOwnerConfig(user: RequestUser, input: { isEnabled: boolean; coverImageUrl?: string | null; whatsappPhone?: string | null; accentColor: string; minAdvanceMinutes: number; maxAdvanceDays: number; minPartySize: number; maxPartySize: number; branchDurations?: Array<{ branchId: string; durationMinutes: number }>; schedules: Array<{ branchId: string; weekday: number; isEnabled: boolean; startTime: string; endTime: string; intervalMin: number }>; exceptions: Array<{ branchId: string; serviceDate: string; isClosed: boolean; startTime?: string; endTime?: string; intervalMin?: number }> }) {
+  async saveOwnerConfig(user: RequestUser, input: { isEnabled: boolean; coverImageUrl?: string | null; whatsappPhone?: string | null; accentColor: string; minAdvanceMinutes: number; maxAdvanceDays: number; minPartySize: number; maxPartySize: number; largePartyThreshold?: number | null; agencyPartyThreshold?: number | null; remindersEnabled?: boolean; reminderPartySizeFrom?: number | null; reminderHoursBefore?: number | null; branchDurations?: Array<{ branchId: string; durationMinutes: number }>; bookingWindows: Array<{ branchId: string; weekday: number; service: "lunch" | "dinner"; isEnabled: boolean; startTime: string; endTime: string; intervalMin: number }>; exceptions: Array<{ branchId: string; serviceDate: string; isClosed: boolean; startTime?: string; endTime?: string; intervalMin?: number }> }) {
     const restaurantId = this.assertOwner(user);
     const branchIds = new Set((await this.prisma.branch.findMany({ where: { restaurantId }, select: { id: true } })).map((item) => item.id));
-    if ([...input.schedules, ...input.exceptions, ...(input.branchDurations || [])].some((item) => !branchIds.has(item.branchId))) throw new ForbiddenException("Invalid branch");
-    if (input.schedules.some((item) => timeToMinutes(item.endTime) <= timeToMinutes(item.startTime))) throw new BadRequestException("End time must be after start time");
+    if ([...input.bookingWindows, ...input.exceptions, ...(input.branchDurations || [])].some((item) => !branchIds.has(item.branchId))) throw new ForbiddenException("Invalid branch");
+    if (input.bookingWindows.some((item) => timeToMinutes(item.endTime) <= timeToMinutes(item.startTime))) throw new BadRequestException("End time must be after start time");
     if (input.exceptions.some((item) => !item.isClosed && (!item.startTime || !item.endTime || timeToMinutes(item.endTime) <= timeToMinutes(item.startTime)))) throw new BadRequestException("Invalid date exception");
     await this.prisma.$transaction(async (tx) => {
-      const settingsData = { isEnabled: input.isEnabled, coverImageUrl: input.coverImageUrl || null, ...(input.whatsappPhone === undefined ? {} : { whatsappPhone: input.whatsappPhone || null }), accentColor: input.accentColor, minAdvanceMinutes: input.minAdvanceMinutes, maxAdvanceDays: input.maxAdvanceDays, minPartySize: input.minPartySize, maxPartySize: input.maxPartySize };
+      const settingsData = { isEnabled: input.isEnabled, coverImageUrl: input.coverImageUrl || null, ...(input.whatsappPhone === undefined ? {} : { whatsappPhone: input.whatsappPhone || null }), accentColor: input.accentColor, minAdvanceMinutes: input.minAdvanceMinutes, maxAdvanceDays: input.maxAdvanceDays, minPartySize: input.minPartySize, maxPartySize: input.maxPartySize, largePartyThreshold: input.largePartyThreshold || null, agencyPartyThreshold: input.agencyPartyThreshold || null, remindersEnabled: input.remindersEnabled || false, reminderPartySizeFrom: input.remindersEnabled ? input.reminderPartySizeFrom || null : null, reminderHoursBefore: input.remindersEnabled ? input.reminderHoursBefore || null : null };
       await tx.onlineBookingSettings.upsert({ where: { restaurantId }, create: { restaurantId, ...settingsData }, update: settingsData });
+      await tx.restaurantCustomization.upsert({ where: { restaurantId }, create: { restaurantId }, update: { configVersion: { increment: 1 } } });
       await Promise.all((input.branchDurations || []).map((item) => tx.branch.update({ where: { id: item.branchId }, data: { onlineBookingDurationMinutes: item.durationMinutes } })));
       await tx.onlineBookingSchedule.deleteMany({ where: { restaurantId } });
-      if (input.schedules.length) await tx.onlineBookingSchedule.createMany({ data: input.schedules.map((item) => ({ ...item, restaurantId })) });
-      // Keep the legacy editor compatible while the new multi-window editor is
-      // introduced: every saved weekly rule is mirrored to the unified source.
       await tx.bookingWindow.deleteMany({ where: { restaurantId } });
-      if (input.schedules.length) await tx.bookingWindow.createMany({ data: input.schedules.map((item) => ({ restaurantId, branchId: item.branchId, weekday: item.weekday, service: timeToMinutes(item.startTime) < 17 * 60 ? "lunch" : "dinner", isEnabled: item.isEnabled, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin })) });
+      if (input.bookingWindows.length) await tx.bookingWindow.createMany({ data: input.bookingWindows.map((item) => ({ ...item, restaurantId })) });
       await tx.onlineBookingException.deleteMany({ where: { restaurantId } });
       if (input.exceptions.length) await tx.onlineBookingException.createMany({ data: input.exceptions.map((item) => ({ ...item, restaurantId, serviceDate: serviceDate(item.serviceDate), startTime: item.isClosed ? null : item.startTime, endTime: item.isClosed ? null : item.endTime, intervalMin: item.isClosed ? null : item.intervalMin || 30 })) });
     });
@@ -159,26 +159,17 @@ export class OnlineBookingsService {
     const restaurant = await this.restaurantBySlug(slug); const settings = restaurant.onlineBooking!;
     const branch = await this.resolveBranch(restaurant.id, input.branch);
     if (input.partySize < settings.minPartySize || input.partySize > settings.maxPartySize) throw new BadRequestException("Party size is outside the allowed range");
-    const [schedules, exceptions] = await Promise.all([
-      this.prisma.onlineBookingSchedule.findMany({ where: { restaurantId: restaurant.id, branchId: branch.id, isEnabled: true } }),
-      this.prisma.onlineBookingException.findMany({ where: { restaurantId: restaurant.id, branchId: branch.id, serviceDate: { gte: serviceDate(dates[0]), lte: serviceDate(dates[dates.length - 1]) } } })
-    ]);
-    const schedulesByWeekday = new Map(schedules.map((schedule) => [schedule.weekday, schedule]));
-    const exceptionsByDate = new Map(exceptions.map((exception) => [exception.serviceDate.toISOString().slice(0, 10), exception]));
     const availableDates: string[] = [];
     for (const date of dates) {
       try {
         this.validateWindow(date, settings, branch.timezone);
-        const exception = exceptionsByDate.get(date);
-        const schedule = exception
-          ? (!exception.isClosed && exception.startTime && exception.endTime && exception.intervalMin ? exception : null)
-          : schedulesByWeekday.get(weekday(date, branch.timezone));
-        if (!schedule) continue;
-        const { startTime, endTime, intervalMin } = schedule;
-        if (!startTime || !endTime || !intervalMin) continue;
-        for (let minute = timeToMinutes(startTime); minute < timeToMinutes(endTime); minute += intervalMin) {
-          if (this.meetsAdvance(date, minutesToTime(minute), settings.minAdvanceMinutes, branch.timezone)) { availableDates.push(date); break; }
-        }
+        const schedules = await this.schedulesFor(restaurant.id, branch.id, date, branch.timezone);
+        if (schedules.some((schedule) => {
+          for (let minute = timeToMinutes(schedule.startTime); minute < timeToMinutes(schedule.endTime); minute += schedule.intervalMin) {
+            if (this.meetsAdvance(date, minutesToTime(minute), settings.minAdvanceMinutes, branch.timezone)) return true;
+          }
+          return false;
+        })) availableDates.push(date);
       } catch { /* Closed and out-of-window dates remain unavailable. */ }
     }
     return { month: input.month, availableDates };

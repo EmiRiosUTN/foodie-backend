@@ -17,6 +17,18 @@ type ResolvedIntegrationToken = {
   isGlobal: boolean;
 };
 
+const localDate = (timeZone: string) => {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+};
+
+const dateAfter = (date: string) => {
+  const next = new Date(`${date}T00:00:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+};
+
 @Injectable()
 export class IntegrationsService {
   constructor(
@@ -43,7 +55,7 @@ export class IntegrationsService {
         specials: { where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } }, orderBy: [{ startsAt: "asc" }, { title: "asc" }] },
         branches: {
           include: {
-            onlineBookingSchedules: { where: { isEnabled: true }, orderBy: { weekday: "asc" } },
+              bookingWindows: { where: { isEnabled: true }, orderBy: [{ weekday: "asc" }, { service: "asc" }] },
             onlineBookingExceptions: { where: { serviceDate: { gte: new Date(now.toISOString().slice(0, 10)) } }, orderBy: { serviceDate: "asc" } }
           },
           orderBy: { createdAt: "asc" }
@@ -56,7 +68,7 @@ export class IntegrationsService {
       restaurant: { name: restaurant.name, slug: restaurant.slug, description: restaurant.customization?.description || null, address: restaurant.customization?.address || null, mapsUrl: restaurant.customization?.mapsUrl || null, menuUrl: restaurant.customization?.menuUrl || null, whatsappPhone: booking?.whatsappPhone || null },
       specials: restaurant.specials.map((special) => ({ title: special.title, description: special.description, price: special.price ? Number(special.price) : null, imageUrl: special.imageUrl, externalUrl: special.externalUrl, startsAt: special.startsAt.toISOString().slice(0, 10), endsAt: special.endsAt.toISOString().slice(0, 10) })),
       reservationPolicy: { isEnabled: booking?.isEnabled || false, minAdvanceMinutes: booking?.minAdvanceMinutes || 60, maxAdvanceDays: booking?.maxAdvanceDays || 60, minPartySize: booking?.minPartySize || 1, maxPartySize: booking?.maxPartySize || 12 },
-      branches: restaurant.branches.map((branch) => ({ id: branch.id, name: branch.name, timezone: branch.timezone, durationMinutes: branch.onlineBookingDurationMinutes, schedules: branch.onlineBookingSchedules.map((schedule) => ({ weekday: schedule.weekday, startTime: schedule.startTime, endTime: schedule.endTime, intervalMin: schedule.intervalMin })), exceptions: branch.onlineBookingExceptions.map((exception) => ({ serviceDate: exception.serviceDate.toISOString().slice(0, 10), isClosed: exception.isClosed, startTime: exception.startTime, endTime: exception.endTime, intervalMin: exception.intervalMin })) }))
+      branches: restaurant.branches.map((branch) => ({ id: branch.id, name: branch.name, timezone: branch.timezone, durationMinutes: branch.onlineBookingDurationMinutes, bookingWindows: branch.bookingWindows.map((window) => ({ weekday: window.weekday, service: window.service, startTime: window.startTime, endTime: window.endTime, intervalMin: window.intervalMin })), exceptions: branch.onlineBookingExceptions.map((exception) => ({ serviceDate: exception.serviceDate.toISOString().slice(0, 10), isClosed: exception.isClosed, startTime: exception.startTime, endTime: exception.endTime, intervalMin: exception.intervalMin })) }))
     };
   }
 
@@ -70,20 +82,34 @@ export class IntegrationsService {
       include: {
         customization: true, onlineBooking: true,
         specials: { where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } }, orderBy: { title: "asc" } },
+        faqs: { where: { isActive: true }, orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
+        assistantUpdates: { where: { isActive: true }, orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
         bookingCutoffs: true,
         branches: { where: { isEnabled: true }, include: { bookingWindows: { where: { isEnabled: true }, orderBy: [{ weekday: "asc" }, { service: "asc" }] }, bookingExceptions: { where: { serviceDate: { gte: new Date(now.toISOString().slice(0, 10)) } }, orderBy: { serviceDate: "asc" } }, rooms: { where: { isActive: true }, select: { name: true, description: true, isOutdoor: true } } }, orderBy: { createdAt: "asc" } }
       }
     });
     const c = restaurant.customization; const b = restaurant.onlineBooking;
+    const timeZone = restaurant.branches[0]?.timezone || "America/Argentina/Buenos_Aires";
+    const today = localDate(timeZone);
+    const assistantUpdates = restaurant.assistantUpdates.filter((update) => update.validityType === "indefinite" || (update.startsAt && update.endsAt && update.startsAt.toISOString().slice(0, 10) <= today && update.endsAt.toISOString().slice(0, 10) >= today));
+    const nextChangeDates = restaurant.assistantUpdates.flatMap((update) => {
+      if (update.validityType === "indefinite" || !update.startsAt || !update.endsAt) return [];
+      const start = update.startsAt.toISOString().slice(0, 10);
+      const end = update.endsAt.toISOString().slice(0, 10);
+      return start > today ? [start] : end >= today ? [dateAfter(end)] : [];
+    }).sort();
+    const nextContextChangeAt = nextChangeDates[0] ? new Date(`${nextChangeDates[0]}T00:00:00.000Z`).toISOString() : null;
     const context = {
       restaurant: { name: restaurant.name, slug: restaurant.slug, description: c?.description || null, cuisineType: c?.cuisineType || null, address: c?.address || null, city: c?.city || null, province: c?.province || null, country: c?.country || null, phone: c?.phone || null, whatsapp: c?.humanSupportWhatsapp || b?.whatsappPhone || null, email: c?.email || null, websiteUrl: c?.websiteUrl || null, instagramUrl: c?.instagramUrl || null, googleMapsUrl: c?.mapsUrl || null, menuUrl: c?.menuUrl || null },
       assistant: { enabled: c?.assistantEnabled ?? true, name: c?.assistantName || null, role: c?.assistantRole || "asistente virtual", locale: c?.assistantLocale || "es-AR", tone: c?.assistantTone || "calido_breve_profesional", firstGreeting: c?.assistantFirstGreeting || null, disclosure: c?.assistantDisclosure ?? true, humanSupport: { phone: c?.humanSupportPhone || c?.phone || null, whatsapp: c?.humanSupportWhatsapp || b?.whatsappPhone || null, email: c?.humanSupportEmail || c?.email || null } },
-      reservationPolicy: { publicBookingEnabled: b?.isEnabled || false, minimumAdvanceMinutes: b?.minAdvanceMinutes || 60, maximumAdvance: { value: b?.maximumAdvanceValue || b?.maxAdvanceDays || 60, unit: b?.maximumAdvanceUnit || "days" }, onlinePartySize: { min: b?.minPartySize || 1, max: b?.maxPartySize || 12 }, largePartyThreshold: b?.largePartyThreshold || null, largePartyAction: b?.largePartyThreshold ? "whatsapp" : null, cutoffRules: restaurant.bookingCutoffs.map((rule) => ({ service: rule.service, weekdays: rule.weekdays, minimumAdvanceMinutes: rule.minimumAdvanceMinutes, sameDayOnly: rule.sameDayOnly, fallbackAction: rule.fallbackAction })) },
-      branches: restaurant.branches.map((branch) => ({ name: branch.publicName || branch.name, timezone: branch.timezone, publicBookingEnabled: branch.publicBookingEnabled, address: branch.address || c?.address || null, contact: { phone: branch.phone || c?.phone || null, whatsapp: branch.whatsappPhone || c?.humanSupportWhatsapp || b?.whatsappPhone || null }, durationMinutes: branch.onlineBookingDurationMinutes, bookingWindows: branch.bookingWindows.map((window) => ({ weekday: window.weekday, service: window.service, startTime: window.startTime, endTime: window.endTime, intervalMinutes: window.intervalMin })), exceptions: branch.bookingExceptions.map((exception) => ({ date: exception.serviceDate.toISOString().slice(0, 10), type: exception.type, windows: exception.windows })), rooms: branch.rooms })),
-      specials: restaurant.specials.map((special) => ({ name: special.title, description: special.description, price: special.price ? Number(special.price) : null, validFrom: special.startsAt.toISOString().slice(0, 10), validUntil: special.endsAt.toISOString().slice(0, 10) }))
+      reservationPolicy: { publicBookingEnabled: b?.isEnabled || false, minimumAdvanceMinutes: b?.minAdvanceMinutes || 60, maximumAdvance: { value: b?.maximumAdvanceValue || b?.maxAdvanceDays || 60, unit: b?.maximumAdvanceUnit || "days" }, onlinePartySize: { min: b?.minPartySize || 1, max: b?.maxPartySize || 12 }, largeParty: { partySizeFrom: b?.largePartyThreshold || null, action: b?.largePartyThreshold ? "whatsapp" : null }, agency: { partySizeFrom: b?.agencyPartyThreshold || null, action: b?.agencyPartyThreshold ? "ask_if_agency" : null }, reminder: { enabled: b?.remindersEnabled ?? false, partySizeFrom: b?.reminderPartySizeFrom || null, hoursBefore: b?.reminderHoursBefore || null, channel: "whatsapp" }, cutoffRules: restaurant.bookingCutoffs.map((rule) => ({ service: rule.service, weekdays: rule.weekdays, minimumAdvanceMinutes: rule.minimumAdvanceMinutes, sameDayOnly: rule.sameDayOnly, fallbackAction: rule.fallbackAction })) },
+      branches: restaurant.branches.map((branch) => ({ id: branch.id, name: branch.publicName || branch.name, enabled: branch.isEnabled, timezone: branch.timezone, publicBookingEnabled: branch.publicBookingEnabled, address: branch.address || c?.address || null, contact: { phone: branch.phone || c?.phone || null, whatsapp: branch.whatsappPhone || c?.humanSupportWhatsapp || b?.whatsappPhone || null }, durationMinutes: branch.onlineBookingDurationMinutes, bookingWindows: branch.bookingWindows.map((window) => ({ weekday: window.weekday, service: window.service, startTime: window.startTime, endTime: window.endTime, intervalMinutes: window.intervalMin })), exceptions: branch.bookingExceptions.map((exception) => ({ date: exception.serviceDate.toISOString().slice(0, 10), type: exception.type, windows: exception.windows })), rooms: branch.rooms })),
+      specials: restaurant.specials.map((special) => ({ name: special.title, description: special.description, price: special.price ? Number(special.price) : null, validFrom: special.startsAt.toISOString().slice(0, 10), validUntil: special.endsAt.toISOString().slice(0, 10) })),
+      faqs: restaurant.faqs.map((faq) => ({ topic: faq.topic, question: faq.question, answer: faq.answer })),
+      assistantUpdates: assistantUpdates.map((update) => ({ title: update.title, category: update.category, content: update.content, validityType: update.validityType, startsAt: update.startsAt?.toISOString().slice(0, 10) || null, endsAt: update.endsAt?.toISOString().slice(0, 10) || null }))
     };
     await this.prisma.integrationToken.update({ where: { id: token.id }, data: { lastUsedAt: now } });
-    return { configVersion: c?.configVersion || 1, updatedAt: c?.updatedAt || restaurant.updatedAt, corePromptVersion: FOODIE_CORE_PROMPT_VERSION, context, systemMessage: compileAssistantSystemMessage(context) };
+    return { configVersion: c?.configVersion || 1, updatedAt: c?.updatedAt || restaurant.updatedAt, nextContextChangeAt, corePromptVersion: FOODIE_CORE_PROMPT_VERSION, context, systemMessage: compileAssistantSystemMessage(context) };
   }
 
   async listExternalRooms(apiKey: string, input: { restaurantId?: string; branchId?: string }) {

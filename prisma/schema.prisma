@@ -138,6 +138,7 @@ model Restaurant {
   specials          RestaurantSpecial[]
   faqs              RestaurantFaq[]
   assistantUpdates  RestaurantAssistantUpdate[]
+  openingHours      BranchOpeningHour[]
   bookingWindows    BookingWindow[]
   bookingCutoffs    BookingCutoffRule[]
   bookingExceptions BookingException[]
@@ -272,6 +273,7 @@ model Branch {
   onlineBookingExceptions OnlineBookingException[]
   bookingWindows BookingWindow[]
   bookingExceptions BookingException[]
+  openingHours BranchOpeningHour[]
 
   @@index([restaurantId])
 }
@@ -454,6 +456,22 @@ model OnlineBookingException {
 
   @@unique([branchId, serviceDate])
   @@index([restaurantId, branchId, serviceDate])
+}
+
+model BranchOpeningHour {
+  id          String   @id @default(cuid())
+  restaurantId String
+  branchId    String
+  weekday     Int
+  startTime   String
+  endTime     String
+  endsNextDay Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  restaurant  Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch      Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, branchId, weekday])
 }
 
 model BookingWindow {

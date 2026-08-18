@@ -19,6 +19,7 @@ enum RestaurantRole {
   waiter
   cashier
   kitchen
+  events
 }
 
 enum ReservationStatus {

@@ -6,4 +6,5 @@ export type RestaurantRole =
   | "host"
   | "waiter"
   | "cashier"
-  | "kitchen";
+  | "kitchen"
+  | "events";

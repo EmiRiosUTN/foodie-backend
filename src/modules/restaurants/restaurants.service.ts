@@ -387,7 +387,7 @@ export class RestaurantsService {
 
   async createOwnRestaurantUser(
     actor: RequestUser,
-    input: { fullName: string; email: string; password: string; role: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen" }
+    input: { fullName: string; email: string; password: string; role: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen" | "events" }
   ) {
     const restaurantId = this.assertRestaurantActor(actor);
     if (!this.canManageRestaurantUsers(actor)) throw new ForbiddenException("Insufficient role");
@@ -401,7 +401,7 @@ export class RestaurantsService {
       fullName?: string;
       email?: string;
       password?: string;
-      role?: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen";
+      role?: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen" | "events";
       isActive?: boolean;
     }
   ) {
@@ -446,7 +446,7 @@ export class RestaurantsService {
   }
   async createRestaurantUser(
     restaurantId: string,
-    input: { fullName: string; email: string; password: string; role: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen" },
+    input: { fullName: string; email: string; password: string; role: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen" | "events" },
     actor: RequestUser
   ) {
     const restaurant = await this.prisma.restaurant.findUnique({ where: { id: restaurantId } });
@@ -497,7 +497,7 @@ export class RestaurantsService {
       fullName?: string;
       email?: string;
       password?: string;
-      role?: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen";
+      role?: "restaurant_owner" | "restaurant_manager" | "host" | "waiter" | "cashier" | "kitchen" | "events";
       isActive?: boolean;
     },
     actor: RequestUser

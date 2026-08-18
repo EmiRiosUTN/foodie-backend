@@ -8,7 +8,7 @@ const restaurantUserSchema = z.object({
   fullName: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(4),
-  role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter", "cashier", "kitchen"])
+  role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter", "cashier", "kitchen", "events"])
 });
 
 const updateRestaurantUserSchema = z
@@ -16,7 +16,7 @@ const updateRestaurantUserSchema = z
     fullName: z.string().min(2).optional(),
     email: z.string().email().optional(),
     password: z.string().min(4).optional(),
-    role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter", "cashier", "kitchen"]).optional(),
+    role: z.enum(["restaurant_owner", "restaurant_manager", "host", "waiter", "cashier", "kitchen", "events"]).optional(),
     isActive: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, "At least one field is required");

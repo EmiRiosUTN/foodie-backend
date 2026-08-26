@@ -63,7 +63,7 @@ export class GiftCardsService {
     if (input.name.trim().length < 2 || input.description.trim().length < 2) throw new ConflictException("El producto requiere nombre y descripción");
     if (!Number.isInteger(input.validityDays) || input.validityDays < 1 || input.validityDays > 3650) throw new ConflictException("La vigencia debe estar entre 1 y 3650 días");
     if (input.type === "FIXED_MENU" && (!input.price || input.price <= 0 || !input.partySize || input.partySize < 1)) throw new ConflictException("Un menú requiere precio y cantidad de personas");
-    if (input.type === "OPEN_AMOUNT" && (input.minAmount == null || input.maxAmount == null || input.minAmount <= 0 || input.maxAmount < input.minAmount)) throw new ConflictException("El importe libre requiere mínimo y máximo válidos");
+    if (input.type === "OPEN_AMOUNT" && ((input.minAmount != null && input.minAmount <= 0) || (input.maxAmount != null && input.maxAmount <= 0) || (input.minAmount != null && input.maxAmount != null && input.maxAmount < input.minAmount))) throw new ConflictException("Los límites del importe libre no son válidos");
     if ([...(input.excludedDates || [])].some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date))) throw new ConflictException("Hay una fecha excluida inválida");
   }
 

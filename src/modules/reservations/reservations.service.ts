@@ -52,6 +52,16 @@ export class ReservationsService {
     return hours < 17 ? "mediodia" : "noche";
   }
 
+  private async validateBookingException(restaurantId: string, branchId: string, serviceDate: Date, serviceTime: string) {
+    const exception = await this.prisma.bookingException.findUnique({ where: { branchId_serviceDate: { branchId, serviceDate } } });
+    if (!exception) return;
+    if (exception.type !== "custom_hours") throw new ConflictException("El restaurante no toma reservas en esta fecha.");
+    const service = this.deriveTurnFromServiceTime(serviceTime) === "mediodia" ? "lunch" : "dinner";
+    const windows = Array.isArray(exception.windows) ? exception.windows as Array<{ service?: string; startTime?: string; endTime?: string }> : [];
+    const window = windows.find((item) => item.service === service && item.startTime && item.endTime && serviceTime >= item.startTime && serviceTime < item.endTime);
+    if (!window) throw new ConflictException("El turno seleccionado no está disponible para esta fecha.");
+  }
+
   list(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
     const restaurantId = this.restaurantScope(user);
     return this.prisma.reservation.findMany({
@@ -186,6 +196,7 @@ export class ReservationsService {
     }
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
+    await this.validateBookingException(restaurantId, input.branchId, serviceDate, serviceTime);
     const durationMinutes = input.durationMinutes || 180;
 
     const preferredFeatures = input.preferredFeatures || [];
@@ -526,6 +537,7 @@ export class ReservationsService {
     }
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
+    await this.validateBookingException(input.restaurantId, input.branchId, serviceDate, serviceTime);
     const preferredFeatures = input.preferredFeatures || [];
     const preferredAssignment = await this.assignTables(this.prisma, {
       restaurantId: input.restaurantId,
@@ -695,6 +707,7 @@ export class ReservationsService {
     if (Number.isNaN(nextServiceDate.getTime())) {
       throw new BadRequestException("Invalid service date");
     }
+    await this.validateBookingException(restaurantId, nextBranchId, nextServiceDate, nextServiceTime);
 
     const room = await this.prisma.room.findFirst({
       where: {

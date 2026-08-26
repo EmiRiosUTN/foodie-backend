@@ -12,6 +12,7 @@ import { RestaurantsModule } from "./restaurants/restaurants.module";
 import { TablesModule } from "./tables/tables.module";
 import { OnlineBookingsModule } from "./online-bookings/online-bookings.module";
 import { RestaurantConfigurationModule } from "./restaurant-configuration/restaurant-configuration.module";
+import { GiftCardsModule } from "./gift-cards/gift-cards.module";
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { RestaurantConfigurationModule } from "./restaurant-configuration/restau
     IntegrationsModule,
     OnlineBookingsModule,
     RestaurantConfigurationModule,
+    GiftCardsModule,
     AuditModule
   ]
 })

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Put } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Put } from "@nestjs/common";
 import { z } from "zod";
 import { CurrentUser } from "../../common/auth/current-user.decorator";
 import type { RequestUser } from "../../common/auth/request-user";
@@ -24,5 +24,17 @@ const customizationSchema = z.object({ description: optionalText(500), cuisineTy
 export class RestaurantConfigurationController {
   constructor(private readonly service: RestaurantConfigurationService) {}
   @Get("personalize") getPersonalize(@CurrentUser() user: RequestUser) { return this.service.getPersonalize(user); }
-  @Put("personalize") savePersonalize(@CurrentUser() user: RequestUser, @Body() body: unknown) { return this.service.savePersonalize(user, customizationSchema.parse(body)); }
+  @Put("personalize") savePersonalize(@CurrentUser() user: RequestUser, @Body() body: unknown) {
+    try {
+      return this.service.savePersonalize(user, customizationSchema.parse(body));
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new BadRequestException({
+          message: "Hay datos inválidos en la configuración",
+          issues: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }))
+        });
+      }
+      throw error;
+    }
+  }
 }

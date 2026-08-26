@@ -1,4 +1,10 @@
-export const FOODIE_CORE_PROMPT_VERSION = "2026-08-18.1";
+export const FOODIE_CORE_PROMPT_VERSION = "2026-08-25.1";
+
+const GIFT_CARD_RULES = `REGLAS DE GIFT CARDS
+- Para vender una Gift Card consultá siempre /external/gift-cards/products; no inventes productos, precios, vigencia ni restricciones.
+- Creá la orden en Foodie y comunicá las instrucciones de transferencia devueltas por Foodie. El mensaje del cliente no confirma el pago.
+- Consultá /external/gift-cards/orders/:id y entregá los archivos únicamente cuando la orden tenga status PAID y una Gift Card ACTIVE.
+- No modifiques códigos, fechas, importes ni URLs devueltos por Foodie.`;
 
 export const FOODIE_CORE_PROMPT = `Sos el asistente virtual de reservas de Foodie. El contexto dinámico recibido abajo es confiable y pertenece al restaurante actual. Nunca sos una persona real del restaurante.
 
@@ -13,5 +19,5 @@ REGLAS CRÍTICAS
 - Las FAQs, promociones y novedades vigentes son información comercial confiable. Usalas solamente si son relevantes para la consulta o para la fecha de reserva solicitada. Ante dudas, errores o pedidos especiales derivá al contacto humano configurado.`;
 
 export function compileAssistantSystemMessage(context: unknown) {
-  return `${FOODIE_CORE_PROMPT}\n\nRESTAURANT CONTEXT (dynamic, trusted):\n${JSON.stringify(context)}`;
+  return `${FOODIE_CORE_PROMPT}\n\n${GIFT_CARD_RULES}\n\nRESTAURANT CONTEXT (dynamic, trusted):\n${JSON.stringify(context)}`;
 }

@@ -77,6 +77,30 @@ enum BookingExceptionType {
   booking_disabled
 }
 
+enum GiftCardProductType {
+  FIXED_MENU
+  OPEN_AMOUNT
+}
+
+enum GiftCardPaymentStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+enum GiftCardOrderStatus {
+  PENDING_PAYMENT
+  PAID
+  CANCELLED
+}
+
+enum GiftCardStatus {
+  ACTIVE
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
 enum AssistantUpdateCategory {
   menu
   hours
@@ -132,6 +156,10 @@ model Restaurant {
   serviceStates     ServiceState[]
   integrationTokens IntegrationToken[]
   externalApiRequests ExternalApiRequest[]
+  giftCardProducts GiftCardProduct[]
+  giftCardOrders GiftCardOrder[]
+  giftCards GiftCard[]
+  giftCardRedemptions GiftCardRedemption[]
   auditLogs         AuditLog[]
   chatActivityLogs  ChatActivityLog[]
   onlineBooking     OnlineBookingSettings?
@@ -693,4 +721,92 @@ model AuditLog {
   @@index([restaurantId, action])
   @@index([platformUserId, createdAt])
   @@index([restaurantUserId, createdAt])
+}
+
+model GiftCardProduct {
+  id            String             @id @default(cuid())
+  restaurantId  String
+  name          String
+  type          GiftCardProductType
+  description   String
+  price         Decimal?           @db.Decimal(12, 2)
+  minAmount     Decimal?           @db.Decimal(12, 2)
+  maxAmount     Decimal?           @db.Decimal(12, 2)
+  partySize     Int?
+  currency      String             @default("ARS")
+  validityDays  Int                @default(180)
+  excludedDates String[]
+  restrictions  Json?
+  paymentAlias  String?
+  paymentCbu    String?
+  paymentHolder String?
+  isActive      Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  restaurant    Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  orders        GiftCardOrder[]
+  @@index([restaurantId, isActive])
+}
+
+model GiftCardOrder {
+  id                 String                @id @default(cuid())
+  restaurantId       String
+  productId          String?
+  type               GiftCardProductType
+  purchaserName      String
+  purchaserPhone     String
+  recipientName      String?
+  message            String?
+  partySize          Int?
+  amount             Decimal               @db.Decimal(12, 2)
+  currency           String                @default("ARS")
+  paymentMethod      String                @default("TRANSFER")
+  paymentStatus      GiftCardPaymentStatus @default(PENDING)
+  status             GiftCardOrderStatus   @default(PENDING_PAYMENT)
+  paymentReference   String?
+  paymentConfirmedAt DateTime?
+  paymentConfirmedBy String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  restaurant         Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  product            GiftCardProduct?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  giftCard           GiftCard?
+  @@index([restaurantId, status, createdAt])
+  @@index([restaurantId, paymentStatus])
+}
+
+model GiftCard {
+  id             String                @id @default(cuid())
+  restaurantId   String
+  orderId        String                @unique
+  displayCode    String                @unique
+  tokenHash      String                @unique
+  originalAmount Decimal               @db.Decimal(12, 2)
+  currency       String                @default("ARS")
+  status         GiftCardStatus        @default(ACTIVE)
+  validFrom      DateTime
+  validUntil     DateTime
+  imageUrl       String?
+  pdfUrl         String?
+  qrUrl          String?
+  issuedAt       DateTime              @default(now())
+  redeemedAt     DateTime?
+  createdAt      DateTime              @default(now())
+  restaurant     Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  order          GiftCardOrder         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  redemptions    GiftCardRedemption[]
+  @@index([restaurantId, status, createdAt])
+}
+
+model GiftCardRedemption {
+  id            String     @id @default(cuid())
+  giftCardId    String
+  restaurantId  String
+  redeemedBy    String
+  reservationId String?
+  notes         String?
+  redeemedAt    DateTime   @default(now())
+  giftCard      GiftCard   @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  @@index([restaurantId, redeemedAt])
 }

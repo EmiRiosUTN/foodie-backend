@@ -56,7 +56,7 @@ export class IntegrationsService {
         branches: {
           include: {
               bookingWindows: { where: { isEnabled: true }, orderBy: [{ weekday: "asc" }, { service: "asc" }] },
-            onlineBookingExceptions: { where: { serviceDate: { gte: new Date(now.toISOString().slice(0, 10)) } }, orderBy: { serviceDate: "asc" } }
+              bookingExceptions: { where: { serviceDate: { gte: new Date(now.toISOString().slice(0, 10)) } }, orderBy: { serviceDate: "asc" } }
           },
           orderBy: { createdAt: "asc" }
         }
@@ -68,7 +68,7 @@ export class IntegrationsService {
       restaurant: { name: restaurant.name, slug: restaurant.slug, description: restaurant.customization?.description || null, address: restaurant.customization?.address || null, mapsUrl: restaurant.customization?.mapsUrl || null, menuUrl: restaurant.customization?.menuUrl || null, whatsappPhone: booking?.whatsappPhone || null },
       specials: restaurant.specials.map((special) => ({ title: special.title, description: special.description, price: special.price ? Number(special.price) : null, imageUrl: special.imageUrl, externalUrl: special.externalUrl, startsAt: special.startsAt.toISOString().slice(0, 10), endsAt: special.endsAt.toISOString().slice(0, 10) })),
       reservationPolicy: { isEnabled: booking?.isEnabled || false, minAdvanceMinutes: booking?.minAdvanceMinutes || 60, maxAdvanceDays: booking?.maxAdvanceDays || 60, minPartySize: booking?.minPartySize || 1, maxPartySize: booking?.maxPartySize || 12 },
-      branches: restaurant.branches.map((branch) => ({ id: branch.id, name: branch.name, timezone: branch.timezone, durationMinutes: branch.onlineBookingDurationMinutes, bookingWindows: branch.bookingWindows.map((window) => ({ weekday: window.weekday, service: window.service, startTime: window.startTime, endTime: window.endTime, intervalMin: window.intervalMin })), exceptions: branch.onlineBookingExceptions.map((exception) => ({ serviceDate: exception.serviceDate.toISOString().slice(0, 10), isClosed: exception.isClosed, startTime: exception.startTime, endTime: exception.endTime, intervalMin: exception.intervalMin })) }))
+      branches: restaurant.branches.map((branch) => ({ id: branch.id, name: branch.name, timezone: branch.timezone, durationMinutes: branch.onlineBookingDurationMinutes, bookingWindows: branch.bookingWindows.map((window) => ({ weekday: window.weekday, service: window.service, startTime: window.startTime, endTime: window.endTime, intervalMin: window.intervalMin })), exceptions: branch.bookingExceptions.map((exception) => ({ serviceDate: exception.serviceDate.toISOString().slice(0, 10), type: exception.type, windows: exception.windows })) }))
     };
   }
 
@@ -82,6 +82,7 @@ export class IntegrationsService {
       include: {
         customization: true, onlineBooking: true,
         specials: { where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } }, orderBy: { title: "asc" } },
+        giftCardProducts: { where: { isActive: true }, orderBy: { createdAt: "asc" } },
         faqs: { where: { isActive: true }, orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
         assistantUpdates: { where: { isActive: true }, orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
         bookingCutoffs: true,
@@ -106,7 +107,8 @@ export class IntegrationsService {
       branches: restaurant.branches.map((branch) => ({ id: branch.id, name: branch.publicName || branch.name, enabled: branch.isEnabled, timezone: branch.timezone, publicBookingEnabled: branch.publicBookingEnabled, address: branch.address || c?.address || null, contact: { phone: branch.phone || c?.phone || null, whatsapp: branch.whatsappPhone || c?.humanSupportWhatsapp || b?.whatsappPhone || null }, durationMinutes: branch.onlineBookingDurationMinutes, openingHours: branch.openingHours.map((hour) => ({ weekday: hour.weekday, startTime: hour.startTime, endTime: hour.endTime, endsNextDay: hour.endsNextDay })), bookingWindows: branch.bookingWindows.map((window) => ({ weekday: window.weekday, service: window.service, startTime: window.startTime, endTime: window.endTime, intervalMinutes: window.intervalMin })), exceptions: branch.bookingExceptions.map((exception) => ({ date: exception.serviceDate.toISOString().slice(0, 10), type: exception.type, windows: exception.windows })), rooms: branch.rooms })),
       specials: restaurant.specials.map((special) => ({ name: special.title, description: special.description, price: special.price ? Number(special.price) : null, validFrom: special.startsAt.toISOString().slice(0, 10), validUntil: special.endsAt.toISOString().slice(0, 10) })),
       faqs: restaurant.faqs.map((faq) => ({ topic: faq.topic, question: faq.question, answer: faq.answer })),
-      assistantUpdates: assistantUpdates.map((update) => ({ title: update.title, category: update.category, content: update.content, validityType: update.validityType, startsAt: update.startsAt?.toISOString().slice(0, 10) || null, endsAt: update.endsAt?.toISOString().slice(0, 10) || null }))
+      assistantUpdates: assistantUpdates.map((update) => ({ title: update.title, category: update.category, content: update.content, validityType: update.validityType, startsAt: update.startsAt?.toISOString().slice(0, 10) || null, endsAt: update.endsAt?.toISOString().slice(0, 10) || null })),
+      giftCards: { products: restaurant.giftCardProducts.map((product) => ({ id: product.id, name: product.name, type: product.type, description: product.description, price: product.price ? Number(product.price) : null, minAmount: product.minAmount ? Number(product.minAmount) : null, maxAmount: product.maxAmount ? Number(product.maxAmount) : null, partySize: product.partySize, currency: product.currency, validityDays: product.validityDays, excludedDates: product.excludedDates, restrictions: product.restrictions })) }
     };
     await this.prisma.integrationToken.update({ where: { id: token.id }, data: { lastUsedAt: now } });
     return { configVersion: c?.configVersion || 1, updatedAt: c?.updatedAt || restaurant.updatedAt, nextContextChangeAt, corePromptVersion: FOODIE_CORE_PROMPT_VERSION, context, systemMessage: compileAssistantSystemMessage(context) };

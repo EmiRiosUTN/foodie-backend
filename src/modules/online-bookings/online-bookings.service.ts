@@ -82,23 +82,25 @@ export class OnlineBookingsService {
 
   async getOwnerConfig(user: RequestUser) {
     const restaurantId = this.assertOwner(user);
-    const [restaurant, settings, bookingWindows, legacySchedules, exceptions] = await Promise.all([
+    const [restaurant, settings, bookingWindows, legacySchedules, exceptions, legacyExceptions] = await Promise.all([
       this.prisma.restaurant.findUniqueOrThrow({ where: { id: restaurantId }, select: { name: true, slug: true, profileImageUrl: true, branches: { select: { id: true, name: true, publicSlug: true, timezone: true, onlineBookingDurationMinutes: true }, orderBy: { createdAt: "asc" } } } }),
       this.prisma.onlineBookingSettings.findUnique({ where: { restaurantId } }),
       this.prisma.bookingWindow.findMany({ where: { restaurantId }, orderBy: [{ branchId: "asc" }, { weekday: "asc" }, { service: "asc" }] }),
       this.prisma.onlineBookingSchedule.findMany({ where: { restaurantId }, orderBy: [{ branchId: "asc" }, { weekday: "asc" }] }),
+      this.prisma.bookingException.findMany({ where: { restaurantId }, orderBy: { serviceDate: "asc" } }),
       this.prisma.onlineBookingException.findMany({ where: { restaurantId }, orderBy: { serviceDate: "asc" } })
     ]);
     const windows = bookingWindows.length ? bookingWindows : legacySchedules.map((schedule) => ({ ...schedule, service: timeToMinutes(schedule.startTime) < 17 * 60 ? "lunch" as const : "dinner" as const }));
-    return { restaurant, settings: settings || { isEnabled: false, coverImageUrl: null, whatsappPhone: null, accentColor: "#FF5A00", minAdvanceMinutes: 60, maxAdvanceDays: 60, minPartySize: 1, maxPartySize: 12, largePartyThreshold: null, agencyPartyThreshold: null, remindersEnabled: false, reminderPartySizeFrom: null, reminderHoursBefore: null }, bookingWindows: windows, exceptions: exceptions.map((item) => ({ ...item, serviceDate: item.serviceDate.toISOString().slice(0, 10) })) };
+    const normalizedExceptions = exceptions.length ? exceptions : legacyExceptions.map((item) => ({ branchId: item.branchId, serviceDate: item.serviceDate, type: item.isClosed ? "closed" as const : "custom_hours" as const, windows: item.isClosed || !item.startTime || !item.endTime ? [] : [{ service: item.startTime < "17:00" ? "lunch" as const : "dinner" as const, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin || 30 }] }));
+    return { restaurant, settings: settings || { isEnabled: false, coverImageUrl: null, whatsappPhone: null, accentColor: "#FF5A00", minAdvanceMinutes: 60, maxAdvanceDays: 60, minPartySize: 1, maxPartySize: 12, largePartyThreshold: null, agencyPartyThreshold: null, remindersEnabled: false, reminderPartySizeFrom: null, reminderHoursBefore: null }, bookingWindows: windows, exceptions: normalizedExceptions.map((item) => ({ ...item, serviceDate: item.serviceDate.toISOString().slice(0, 10) })) };
   }
 
-  async saveOwnerConfig(user: RequestUser, input: { isEnabled: boolean; coverImageUrl?: string | null; whatsappPhone?: string | null; accentColor: string; minAdvanceMinutes: number; maxAdvanceDays: number; minPartySize: number; maxPartySize: number; largePartyThreshold?: number | null; agencyPartyThreshold?: number | null; remindersEnabled?: boolean; reminderPartySizeFrom?: number | null; reminderHoursBefore?: number | null; branchDurations?: Array<{ branchId: string; durationMinutes: number }>; bookingWindows: Array<{ branchId: string; weekday: number; service: "lunch" | "dinner"; isEnabled: boolean; startTime: string; endTime: string; intervalMin: number }>; exceptions: Array<{ branchId: string; serviceDate: string; isClosed: boolean; startTime?: string; endTime?: string; intervalMin?: number }> }) {
+  async saveOwnerConfig(user: RequestUser, input: { isEnabled: boolean; coverImageUrl?: string | null; whatsappPhone?: string | null; accentColor: string; minAdvanceMinutes: number; maxAdvanceDays: number; minPartySize: number; maxPartySize: number; largePartyThreshold?: number | null; agencyPartyThreshold?: number | null; remindersEnabled?: boolean; reminderPartySizeFrom?: number | null; reminderHoursBefore?: number | null; branchDurations?: Array<{ branchId: string; durationMinutes: number }>; bookingWindows: Array<{ branchId: string; weekday: number; service: "lunch" | "dinner"; isEnabled: boolean; startTime: string; endTime: string; intervalMin: number }>; exceptions: Array<{ branchId: string; serviceDate: string; type: "closed" | "custom_hours" | "fully_booked" | "booking_disabled"; windows?: Array<{ service: "lunch" | "dinner"; startTime: string; endTime: string; intervalMin: number }> }> }) {
     const restaurantId = this.assertOwner(user);
     const branchIds = new Set((await this.prisma.branch.findMany({ where: { restaurantId }, select: { id: true } })).map((item) => item.id));
     if ([...input.bookingWindows, ...input.exceptions, ...(input.branchDurations || [])].some((item) => !branchIds.has(item.branchId))) throw new ForbiddenException("Invalid branch");
     if (input.bookingWindows.some((item) => timeToMinutes(item.endTime) <= timeToMinutes(item.startTime))) throw new BadRequestException("End time must be after start time");
-    if (input.exceptions.some((item) => !item.isClosed && (!item.startTime || !item.endTime || timeToMinutes(item.endTime) <= timeToMinutes(item.startTime)))) throw new BadRequestException("Invalid date exception");
+    if (input.exceptions.some((item) => item.type === "custom_hours" && (!item.windows?.length || item.windows.some((window) => timeToMinutes(window.endTime) <= timeToMinutes(window.startTime))))) throw new BadRequestException("Invalid date exception");
     await this.prisma.$transaction(async (tx) => {
       const settingsData = { isEnabled: input.isEnabled, coverImageUrl: input.coverImageUrl || null, ...(input.whatsappPhone === undefined ? {} : { whatsappPhone: input.whatsappPhone || null }), accentColor: input.accentColor, minAdvanceMinutes: input.minAdvanceMinutes, maxAdvanceDays: input.maxAdvanceDays, minPartySize: input.minPartySize, maxPartySize: input.maxPartySize, largePartyThreshold: input.largePartyThreshold || null, agencyPartyThreshold: input.agencyPartyThreshold || null, remindersEnabled: input.remindersEnabled || false, reminderPartySizeFrom: input.remindersEnabled ? input.reminderPartySizeFrom || null : null, reminderHoursBefore: input.remindersEnabled ? input.reminderHoursBefore || null : null };
       await tx.onlineBookingSettings.upsert({ where: { restaurantId }, create: { restaurantId, ...settingsData }, update: settingsData });
@@ -107,8 +109,8 @@ export class OnlineBookingsService {
       await tx.onlineBookingSchedule.deleteMany({ where: { restaurantId } });
       await tx.bookingWindow.deleteMany({ where: { restaurantId } });
       if (input.bookingWindows.length) await tx.bookingWindow.createMany({ data: input.bookingWindows.map((item) => ({ ...item, restaurantId })) });
-      await tx.onlineBookingException.deleteMany({ where: { restaurantId } });
-      if (input.exceptions.length) await tx.onlineBookingException.createMany({ data: input.exceptions.map((item) => ({ ...item, restaurantId, serviceDate: serviceDate(item.serviceDate), startTime: item.isClosed ? null : item.startTime, endTime: item.isClosed ? null : item.endTime, intervalMin: item.isClosed ? null : item.intervalMin || 30 })) });
+      await tx.bookingException.deleteMany({ where: { restaurantId } });
+      if (input.exceptions.length) await tx.bookingException.createMany({ data: input.exceptions.map((item) => ({ restaurantId, branchId: item.branchId, serviceDate: serviceDate(item.serviceDate), type: item.type, windows: item.windows || undefined })) });
     });
     await this.audit.log({ action: "online_booking.updated", targetType: "restaurant", targetId: restaurantId, restaurantId, restaurantUserId: user.sub });
     return this.getOwnerConfig(user);

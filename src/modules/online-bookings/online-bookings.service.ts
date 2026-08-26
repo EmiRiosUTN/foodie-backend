@@ -41,7 +41,7 @@ export class OnlineBookingsService {
     if (exception) {
       if (exception.type !== "custom_hours") return [];
       const windows = Array.isArray(exception.windows) ? exception.windows : [];
-      return windows.filter((item): item is { startTime: string; endTime: string; intervalMin?: number; service?: "lunch" | "dinner" } => Boolean(item && typeof item === "object" && "startTime" in item && "endTime" in item)).map((item) => ({ isEnabled: true, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin || 30, service: item.service }));
+      return windows.filter((item): item is { startTime: string; endTime: string; intervalMin?: number; service?: "lunch" | "dinner" } => Boolean(item && typeof item === "object" && "startTime" in item && "endTime" in item)).map((item) => ({ isEnabled: true, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin || 15, service: item.service }));
     }
     const windows = await this.prisma.bookingWindow.findMany({ where: { restaurantId, branchId, weekday: weekday(date, timezone) }, orderBy: [{ service: "asc" }, { startTime: "asc" }] });
     if (windows.length) return windows.filter((window) => window.isEnabled);
@@ -91,7 +91,7 @@ export class OnlineBookingsService {
       this.prisma.onlineBookingException.findMany({ where: { restaurantId }, orderBy: { serviceDate: "asc" } })
     ]);
     const windows = bookingWindows.length ? bookingWindows : legacySchedules.map((schedule) => ({ ...schedule, service: timeToMinutes(schedule.startTime) < 17 * 60 ? "lunch" as const : "dinner" as const }));
-    const normalizedExceptions = exceptions.length ? exceptions : legacyExceptions.map((item) => ({ branchId: item.branchId, serviceDate: item.serviceDate, type: item.isClosed ? "closed" as const : "custom_hours" as const, windows: item.isClosed || !item.startTime || !item.endTime ? [] : [{ service: item.startTime < "17:00" ? "lunch" as const : "dinner" as const, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin || 30 }] }));
+    const normalizedExceptions = exceptions.length ? exceptions : legacyExceptions.map((item) => ({ branchId: item.branchId, serviceDate: item.serviceDate, type: item.isClosed ? "closed" as const : "custom_hours" as const, windows: item.isClosed || !item.startTime || !item.endTime ? [] : [{ service: item.startTime < "17:00" ? "lunch" as const : "dinner" as const, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin || 15 }] }));
     return { restaurant, settings: settings || { isEnabled: false, coverImageUrl: null, whatsappPhone: null, accentColor: "#FF5A00", minAdvanceMinutes: 60, maxAdvanceDays: 60, minPartySize: 1, maxPartySize: 12, largePartyThreshold: null, agencyPartyThreshold: null, remindersEnabled: false, reminderPartySizeFrom: null, reminderHoursBefore: null }, bookingWindows: windows, exceptions: normalizedExceptions.map((item) => ({ ...item, serviceDate: item.serviceDate.toISOString().slice(0, 10) })) };
   }
 

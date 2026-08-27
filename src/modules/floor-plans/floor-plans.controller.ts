@@ -18,6 +18,22 @@ const updateRoomSchema = z.object({
   isOutdoor: z.boolean().optional()
 });
 
+const reorderRoomsSchema = z.object({
+  branchId: z.string().min(1),
+  roomIds: z.array(z.string().min(1)).min(1)
+}).refine((value) => new Set(value.roomIds).size === value.roomIds.length, "Room ids must be unique");
+
+const roomBlockSchema = z.object({
+  serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  turn: z.enum(["mediodia", "noche"]),
+  reason: z.string().trim().max(500).optional()
+});
+
+const roomBlockQuerySchema = z.object({
+  serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  turn: z.enum(["mediodia", "noche"])
+});
+
 const layoutSchema = z.object({
   zones: z.array(
     z.object({
@@ -74,6 +90,11 @@ export class FloorPlansController {
     return this.floorPlansService.list(user, branchId);
   }
 
+  @Get("blocks")
+  blocks(@CurrentUser() user: RequestUser, @Query("branchId") branchId: string, @Query("serviceDate") serviceDate: string, @Query("turn") turn: string) {
+    return this.floorPlansService.blocks(user, z.object({ branchId: z.string().min(1), ...roomBlockQuerySchema.shape }).parse({ branchId, serviceDate, turn }));
+  }
+
   @Post()
   @Roles("restaurant_owner", "restaurant_manager")
   create(@Body() body: unknown, @CurrentUser() user: RequestUser) {
@@ -88,6 +109,24 @@ export class FloorPlansController {
     @CurrentUser() user: RequestUser
   ) {
     return this.floorPlansService.update(user, roomId, updateRoomSchema.parse(body));
+  }
+
+  @Put("reorder")
+  @Roles("restaurant_owner", "restaurant_manager")
+  reorder(@Body() body: unknown, @CurrentUser() user: RequestUser) {
+    return this.floorPlansService.reorder(user, reorderRoomsSchema.parse(body));
+  }
+
+  @Post(":roomId/blocks")
+  @Roles("restaurant_owner", "restaurant_manager")
+  block(@Param("roomId") roomId: string, @Body() body: unknown, @CurrentUser() user: RequestUser) {
+    return this.floorPlansService.block(user, roomId, roomBlockSchema.parse(body));
+  }
+
+  @Delete(":roomId/blocks")
+  @Roles("restaurant_owner", "restaurant_manager")
+  unblock(@Param("roomId") roomId: string, @Query("serviceDate") serviceDate: string, @Query("turn") turn: string, @CurrentUser() user: RequestUser) {
+    return this.floorPlansService.unblock(user, roomId, roomBlockQuerySchema.parse({ serviceDate, turn }));
   }
 
   @Delete(":roomId")

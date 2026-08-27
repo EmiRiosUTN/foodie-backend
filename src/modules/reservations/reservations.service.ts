@@ -62,6 +62,19 @@ export class ReservationsService {
     if (!window) throw new ConflictException("El turno seleccionado no está disponible para esta fecha.");
   }
 
+  private async isRoomBlocked(restaurantId: string, roomId: string, serviceDate: Date, turn: "mediodia" | "noche", client: PrismaService | Prisma.TransactionClient = this.prisma) {
+    return Boolean(await client.roomBookingBlock.findUnique({
+      where: { roomId_serviceDate_turn: { roomId, serviceDate, turn } },
+      select: { id: true }
+    }));
+  }
+
+  private async assertRoomIsBookable(restaurantId: string, roomId: string, serviceDate: Date, turn: "mediodia" | "noche", client: PrismaService | Prisma.TransactionClient = this.prisma) {
+    if (await this.isRoomBlocked(restaurantId, roomId, serviceDate, turn, client)) {
+      throw new ConflictException("El salon esta cerrado para reservas en la fecha y turno seleccionados.");
+    }
+  }
+
   list(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
     const restaurantId = this.restaurantScope(user);
     return this.prisma.reservation.findMany({
@@ -197,6 +210,7 @@ export class ReservationsService {
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
     await this.validateBookingException(restaurantId, input.branchId, serviceDate, serviceTime);
+    await this.assertRoomIsBookable(restaurantId, input.roomId, serviceDate, turn);
     const durationMinutes = input.durationMinutes || 180;
 
     const preferredFeatures = input.preferredFeatures || [];
@@ -238,6 +252,7 @@ export class ReservationsService {
       // Serializes assignment attempts within a room. This prevents two public
       // requests from both seeing the same last table before either commits.
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Table" WHERE "roomId" = ${input.roomId} FOR UPDATE`);
+      await this.assertRoomIsBookable(restaurantId, input.roomId, serviceDate, turn, tx);
       const assignment = await this.assignTables(tx, {
         restaurantId,
         roomId: input.roomId,
@@ -391,9 +406,13 @@ export class ReservationsService {
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
     const serviceTime = this.normalizeServiceTime(input.serviceTime);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
+    const blockedRooms = await this.prisma.roomBookingBlock.findMany({
+      where: { restaurantId: input.restaurantId, branchId: input.branchId, serviceDate, turn },
+      select: { roomId: true }
+    });
     const rooms = await this.prisma.room.findMany({
-      where: { restaurantId: input.restaurantId, branchId: input.branchId, isActive: true },
-      orderBy: { createdAt: "asc" }
+      where: { restaurantId: input.restaurantId, branchId: input.branchId, isActive: true, id: { notIn: blockedRooms.map((block) => block.roomId) } },
+      orderBy: [{ bookingPriority: "asc" }, { createdAt: "asc" }]
     });
     for (const room of rooms) {
       const assignment = await this.assignTables(this.prisma, {
@@ -538,6 +557,15 @@ export class ReservationsService {
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
     await this.validateBookingException(input.restaurantId, input.branchId, serviceDate, serviceTime);
+    if (await this.isRoomBlocked(input.restaurantId, input.roomId, serviceDate, turn)) {
+      return {
+        available: false, status: "unavailable", branchId: input.branchId, roomId: input.roomId, turn,
+        serviceDate: serviceDate.toISOString(), serviceTime, partySize: input.partySize,
+        room: { id: room.id, name: room.name, isOutdoor: room.isOutdoor }, preferredZone: input.preferredZone || null,
+        preference: { requested: input.preferredFeatures || [], matched: false }, assignment: null,
+        reason: "Room is closed for this service"
+      };
+    }
     const preferredFeatures = input.preferredFeatures || [];
     const preferredAssignment = await this.assignTables(this.prisma, {
       restaurantId: input.restaurantId,
@@ -708,6 +736,7 @@ export class ReservationsService {
       throw new BadRequestException("Invalid service date");
     }
     await this.validateBookingException(restaurantId, nextBranchId, nextServiceDate, nextServiceTime);
+    await this.assertRoomIsBookable(restaurantId, nextRoomId, nextServiceDate, nextTurn);
 
     const room = await this.prisma.room.findFirst({
       where: {
@@ -736,6 +765,7 @@ export class ReservationsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      await this.assertRoomIsBookable(restaurantId, nextRoomId, nextServiceDate, nextTurn, tx);
       const normalizedEmail = input.email !== undefined
         ? this.normalizeOptionalEmail(input.email)
         : reservation.email;

@@ -81,7 +81,9 @@ const externalReservationSchema = z.object({
 
 const externalRoomsSchema = z.object({
   restaurantId: optionalString,
-  branchId: optionalString
+  branchId: optionalString,
+  serviceDate: z.preprocess(emptyToUndefined, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
+  turn: optionalTurn
 });
 
 const cancellationSchema = z.object({
@@ -138,9 +140,11 @@ export class IntegrationsController {
   listExternalRooms(
     @Headers("x-api-key") apiKey: string,
     @Query("restaurantId") restaurantId?: string,
-    @Query("branchId") branchId?: string
+    @Query("branchId") branchId?: string,
+    @Query("serviceDate") serviceDate?: string,
+    @Query("turn") turn?: string
   ) {
-    return this.integrationsService.listExternalRooms(apiKey, externalRoomsSchema.parse({ restaurantId, branchId }));
+    return this.integrationsService.listExternalRooms(apiKey, externalRoomsSchema.parse({ restaurantId, branchId, serviceDate, turn }));
   }
 
   @Public()

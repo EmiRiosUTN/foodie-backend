@@ -127,7 +127,8 @@ export class RestaurantsService {
               include: {
                 zones: true,
                 tables: true
-              }
+              },
+              orderBy: [{ bookingPriority: "asc" }, { createdAt: "asc" }]
             }
           }
         }

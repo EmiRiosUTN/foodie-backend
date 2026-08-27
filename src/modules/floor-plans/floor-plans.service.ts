@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { ForbiddenException, NotFoundException } from "@nestjs/common";
+import { ConflictException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import type { RequestUser } from "../../common/auth/request-user";
 import { RealtimeService } from "../realtime/realtime.service";
@@ -42,6 +42,14 @@ export class FloorPlansService {
       throw new ForbiddenException("Restaurant context required");
     }
     return user.restaurantId;
+  }
+
+  private async bumpAssistantContext(restaurantId: string) {
+    await this.prisma.restaurantCustomization.upsert({
+      where: { restaurantId },
+      create: { restaurantId },
+      update: { configVersion: { increment: 1 } }
+    });
   }
 
   private distanceBetweenRects(
@@ -99,24 +107,86 @@ export class FloorPlansService {
         zones: true,
         tables: true
       },
-      orderBy: { name: "asc" }
+      orderBy: [{ bookingPriority: "asc" }, { createdAt: "asc" }]
     });
   }
 
-  create(
+  async create(
     user: RequestUser,
     input: { branchId: string; name: string; description?: string; isOutdoor?: boolean }
   ) {
     const restaurantId = this.restaurantScope(user);
-    return this.prisma.room.create({
+    const lastRoom = await this.prisma.room.findFirst({
+      where: { restaurantId, branchId: input.branchId },
+      orderBy: { bookingPriority: "desc" },
+      select: { bookingPriority: true }
+    });
+    const room = await this.prisma.room.create({
       data: {
         branchId: input.branchId,
         restaurantId,
         name: input.name,
         description: input.description,
-        isOutdoor: input.isOutdoor || false
+        isOutdoor: input.isOutdoor || false,
+        bookingPriority: (lastRoom?.bookingPriority || 0) + 1
       }
     });
+    await this.bumpAssistantContext(restaurantId);
+    return room;
+  }
+
+  async reorder(user: RequestUser, input: { branchId: string; roomIds: string[] }) {
+    const restaurantId = this.restaurantScope(user);
+    const rooms = await this.prisma.room.findMany({
+      where: { restaurantId, branchId: input.branchId, isActive: true },
+      select: { id: true }
+    });
+    const currentIds = new Set(rooms.map((room) => room.id));
+    if (currentIds.size !== input.roomIds.length || input.roomIds.some((id) => !currentIds.has(id))) {
+      throw new NotFoundException("Room order must include every active room in the branch");
+    }
+    await this.prisma.$transaction(input.roomIds.map((id, index) => this.prisma.room.update({
+      where: { id },
+      data: { bookingPriority: index + 1 }
+    })));
+    await this.bumpAssistantContext(restaurantId);
+    return this.prisma.room.findMany({
+      where: { restaurantId, branchId: input.branchId, isActive: true },
+      orderBy: [{ bookingPriority: "asc" }, { createdAt: "asc" }]
+    });
+  }
+
+  async blocks(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
+    const restaurantId = this.restaurantScope(user);
+    return this.prisma.roomBookingBlock.findMany({
+      where: { restaurantId, branchId: input.branchId, serviceDate: new Date(input.serviceDate), turn: input.turn },
+      select: { id: true, roomId: true, serviceDate: true, turn: true, reason: true, createdAt: true }
+    });
+  }
+
+  async block(user: RequestUser, roomId: string, input: { serviceDate: string; turn: "mediodia" | "noche"; reason?: string }) {
+    const restaurantId = this.restaurantScope(user);
+    const room = await this.prisma.room.findFirst({ where: { id: roomId, restaurantId, isActive: true } });
+    if (!room) throw new NotFoundException("Room not found");
+    const serviceDate = new Date(input.serviceDate);
+    const activeReservations = await this.prisma.reservation.count({
+      where: { restaurantId, roomId, serviceDate, turn: input.turn, status: { notIn: ["cancelled", "completed", "no_show"] } }
+    });
+    if (activeReservations) throw new ConflictException("No se puede bloquear un salon con reservas activas. Reasignalas o cancelalas primero.");
+    const block = await this.prisma.roomBookingBlock.upsert({
+      where: { roomId_serviceDate_turn: { roomId, serviceDate, turn: input.turn } },
+      create: { restaurantId, branchId: room.branchId, roomId, serviceDate, turn: input.turn, reason: input.reason || null, createdByUserId: user.sub },
+      update: { reason: input.reason || null, createdByUserId: user.sub }
+    });
+    await this.bumpAssistantContext(restaurantId);
+    return block;
+  }
+
+  async unblock(user: RequestUser, roomId: string, input: { serviceDate: string; turn: "mediodia" | "noche" }) {
+    const restaurantId = this.restaurantScope(user);
+    await this.prisma.roomBookingBlock.deleteMany({ where: { restaurantId, roomId, serviceDate: new Date(input.serviceDate), turn: input.turn } });
+    await this.bumpAssistantContext(restaurantId);
+    return { ok: true };
   }
 
   async update(
@@ -133,7 +203,7 @@ export class FloorPlansService {
       throw new NotFoundException("Room not found");
     }
 
-    return this.prisma.room.update({
+    const room = await this.prisma.room.update({
       where: { id: roomId },
       data: {
         name: input.name,
@@ -141,6 +211,8 @@ export class FloorPlansService {
         isOutdoor: input.isOutdoor || false
       }
     });
+    await this.bumpAssistantContext(restaurantId);
+    return room;
   }
 
   async remove(user: RequestUser, roomId: string) {
@@ -157,6 +229,7 @@ export class FloorPlansService {
       where: { id: roomId },
       data: { isActive: false }
     });
+    await this.bumpAssistantContext(restaurantId);
 
     return { ok: true };
   }

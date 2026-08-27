@@ -155,6 +155,7 @@ model Restaurant {
   chatTagStyles     ChatTagStyle[]
   reservations      Reservation[]
   serviceStates     ServiceState[]
+  roomBookingBlocks RoomBookingBlock[]
   integrationTokens IntegrationToken[]
   externalApiRequests ExternalApiRequest[]
   giftCardProducts GiftCardProduct[]
@@ -303,6 +304,7 @@ model Branch {
   onlineBookingExceptions OnlineBookingException[]
   bookingWindows BookingWindow[]
   bookingExceptions BookingException[]
+  roomBookingBlocks RoomBookingBlock[]
   openingHours BranchOpeningHour[]
 
   @@index([restaurantId])
@@ -316,6 +318,7 @@ model Room {
   description   String?
   isOutdoor     Boolean         @default(false)
   isActive      Boolean         @default(true)
+  bookingPriority Int            @default(1)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
   restaurant    Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
@@ -324,8 +327,10 @@ model Room {
   zones         RoomZone[]
   tables        Table[]
   reservations  Reservation[]
+  bookingBlocks RoomBookingBlock[]
 
   @@index([restaurantId, branchId])
+  @@index([branchId, bookingPriority])
 }
 
 model RoomZone {
@@ -586,6 +591,25 @@ model Reservation {
 
   @@index([restaurantId, branchId, serviceDate, turn])
   @@index([roomId, serviceDate, turn])
+}
+
+model RoomBookingBlock {
+  id              String   @id @default(cuid())
+  restaurantId    String
+  branchId        String
+  roomId          String
+  serviceDate     DateTime
+  turn            Turn
+  reason          String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch          Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  room            Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, serviceDate, turn])
+  @@index([restaurantId, branchId, serviceDate, turn])
 }
 
 model ReservationTable {

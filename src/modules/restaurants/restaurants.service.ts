@@ -214,6 +214,38 @@ export class RestaurantsService {
     };
   }
 
+  async updateRestaurant(
+    restaurantId: string,
+    input: { name?: string; slug?: string; profileImageUrl?: string | null; isActive?: boolean },
+    actor: RequestUser
+  ) {
+    const existing = await this.prisma.restaurant.findUnique({ where: { id: restaurantId } });
+    if (!existing) throw new NotFoundException("Restaurant not found");
+
+    const name = input.name?.trim();
+    const slug = input.slug?.trim().toLowerCase();
+    if (slug && slug !== existing.slug) {
+      const duplicate = await this.prisma.restaurant.findUnique({ where: { slug } });
+      if (duplicate) throw new ConflictException("Restaurant slug already exists");
+    }
+
+    const updated = await this.prisma.restaurant.update({
+      where: { id: restaurantId },
+      data: { name, slug, profileImageUrl: input.profileImageUrl, isActive: input.isActive }
+    });
+
+    await this.auditService.log({
+      action: "restaurant.updated",
+      targetType: "restaurant",
+      targetId: restaurantId,
+      restaurantId,
+      platformUserId: actor.sub,
+      metadata: { changedFields: Object.keys(input) }
+    });
+
+    return updated;
+  }
+
   async createBranch(
     restaurantId: string,
     input: { name: string; timezone: string },

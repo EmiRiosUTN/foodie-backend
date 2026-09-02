@@ -36,6 +36,14 @@ const chatAuthSchema = z.object({
   email: z.string().email(),
   password: z.string().min(4)
 });
+const updateRestaurantSchema = z
+  .object({
+    name: z.string().min(2).optional(),
+    slug: z.string().min(2).optional(),
+    profileImageUrl: z.string().max(1000).nullable().optional(),
+    isActive: z.boolean().optional()
+  })
+  .refine((value) => Object.keys(value).length > 0, { message: "At least one field is required" });
 
 @Controller("platform/restaurants/:restaurantId")
 @Roles("platform_admin")
@@ -45,6 +53,11 @@ export class PlatformTenantsController {
   @Get()
   detail(@Param("restaurantId") restaurantId: string) {
     return this.restaurantsService.detail(restaurantId);
+  }
+
+  @Patch()
+  update(@Param("restaurantId") restaurantId: string, @Body() body: unknown, @CurrentUser() user: RequestUser) {
+    return this.restaurantsService.updateRestaurant(restaurantId, updateRestaurantSchema.parse(body), user);
   }
 
   @Post("branches")

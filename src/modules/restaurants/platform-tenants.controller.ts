@@ -44,6 +44,7 @@ const updateRestaurantSchema = z
     isActive: z.boolean().optional()
   })
   .refine((value) => Object.keys(value).length > 0, { message: "At least one field is required" });
+const updateBranchSchema = z.object({ name: z.string().min(2) });
 
 @Controller("platform/restaurants/:restaurantId")
 @Roles("platform_admin")
@@ -58,6 +59,16 @@ export class PlatformTenantsController {
   @Patch()
   update(@Param("restaurantId") restaurantId: string, @Body() body: unknown, @CurrentUser() user: RequestUser) {
     return this.restaurantsService.updateRestaurant(restaurantId, updateRestaurantSchema.parse(body), user);
+  }
+
+  @Patch("branches/:branchId")
+  updateBranch(
+    @Param("restaurantId") restaurantId: string,
+    @Param("branchId") branchId: string,
+    @Body() body: unknown,
+    @CurrentUser() user: RequestUser
+  ) {
+    return this.restaurantsService.updateBranch(restaurantId, branchId, updateBranchSchema.parse(body), user);
   }
 
   @Post("branches")

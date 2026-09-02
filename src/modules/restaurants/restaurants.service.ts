@@ -246,6 +246,27 @@ export class RestaurantsService {
     return updated;
   }
 
+  async updateBranch(restaurantId: string, branchId: string, input: { name: string }, actor: RequestUser) {
+    const branch = await this.prisma.branch.findFirst({ where: { id: branchId, restaurantId } });
+    if (!branch) throw new NotFoundException("Branch not found");
+
+    const updated = await this.prisma.branch.update({
+      where: { id: branchId },
+      data: { name: input.name.trim() }
+    });
+
+    await this.auditService.log({
+      action: "branch.updated",
+      targetType: "branch",
+      targetId: branchId,
+      restaurantId,
+      platformUserId: actor.sub,
+      metadata: { changedFields: ["name"] }
+    });
+
+    return updated;
+  }
+
   async createBranch(
     restaurantId: string,
     input: { name: string; timezone: string },

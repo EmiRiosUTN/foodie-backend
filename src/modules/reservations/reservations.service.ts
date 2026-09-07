@@ -450,6 +450,99 @@ export class ReservationsService {
     return this.moveReservationToStateForRestaurant(restaurantId, { reservationId }, next, { actorUserId: user.sub });
   }
 
+  async listTableOptions(user: RequestUser, reservationId: string) {
+    const restaurantId = this.restaurantScope(user);
+    const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
+    await this.assertRoomIsBookable(restaurantId, reservation.roomId, reservation.serviceDate, reservation.turn);
+
+    return this.listAvailableAssignments(this.prisma, {
+      restaurantId,
+      roomId: reservation.roomId,
+      serviceDate: reservation.serviceDate,
+      turn: reservation.turn,
+      partySize: reservation.partySize,
+      serviceTime: reservation.serviceTime,
+      durationMinutes: reservation.durationMinutes,
+      excludeReservationId: reservation.id
+    });
+  }
+
+  async reassignTables(user: RequestUser, reservationId: string, tableIds: string[]) {
+    const restaurantId = this.restaurantScope(user);
+    const normalizedTableIds = [...new Set(tableIds)].sort();
+    if (normalizedTableIds.length !== tableIds.length) throw new BadRequestException("Las mesas seleccionadas están repetidas.");
+
+    const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const current = await this.reassignableReservationOrThrow(restaurantId, reservationId, tx);
+      await this.assertRoomIsBookable(restaurantId, current.roomId, current.serviceDate, current.turn, tx);
+
+      const availableAssignments = await this.listAvailableAssignments(tx, {
+        restaurantId,
+        roomId: current.roomId,
+        serviceDate: current.serviceDate,
+        turn: current.turn,
+        partySize: current.partySize,
+        serviceTime: current.serviceTime,
+        durationMinutes: current.durationMinutes,
+        excludeReservationId: current.id
+      });
+      const assignment = availableAssignments.find((option) => option.tableIds.join("|") === normalizedTableIds.join("|"));
+      if (!assignment) throw new ConflictException("Las mesas seleccionadas ya no están disponibles para esta reserva.");
+
+      await tx.reservationTable.deleteMany({ where: { reservationId: current.id } });
+      await tx.serviceState.updateMany({
+        where: { restaurantId, reservationId: current.id },
+        data: { status: "free", reservationId: null }
+      });
+
+      const changed = await tx.reservation.update({
+        where: { id: current.id },
+        data: {
+          tables: { createMany: { data: assignment.tableIds.map((tableId) => ({ tableId })) } }
+        },
+        include: {
+          room: true,
+          branch: true,
+          customer: { include: { tags: true } },
+          tables: { include: { table: true } }
+        }
+      });
+
+      await Promise.all(
+        assignment.tableIds.map((tableId) =>
+          tx.serviceState.upsert({
+            where: { tableId_reservationId: { tableId, reservationId: current.id } },
+            update: { status: "reserved", branchId: current.branchId, roomId: current.roomId, reservationId: current.id },
+            create: {
+              restaurantId,
+              branchId: current.branchId,
+              roomId: current.roomId,
+              tableId,
+              reservationId: current.id,
+              serviceDate: current.serviceDate,
+              turn: current.turn,
+              status: "reserved"
+            }
+          })
+        )
+      );
+
+      return changed;
+    });
+
+    this.realtimeService.publish("reservation.updated", { restaurantId, reservationId: updated.id, roomId: updated.roomId });
+    await this.auditService.log({
+      action: "reservation.tables_reassigned",
+      targetType: "reservation",
+      targetId: updated.id,
+      restaurantId,
+      restaurantUserId: user.sub,
+      metadata: { code: reservation.code, tableIds: normalizedTableIds }
+    });
+    return updated;
+  }
+
   async moveReservationToStateForRestaurant(
     restaurantId: string,
     input: { reservationId?: string; code?: string },
@@ -907,7 +1000,23 @@ export class ReservationsService {
     return updated;
   }
 
-  private async assignTables(
+  private async reassignableReservationOrThrow(
+    restaurantId: string,
+    reservationId: string,
+    client: PrismaService | Prisma.TransactionClient = this.prisma
+  ) {
+    const reservation = await client.reservation.findFirst({
+      where: { id: reservationId, restaurantId },
+      include: { tables: true }
+    });
+    if (!reservation) throw new NotFoundException("Reservation not found");
+    if (!(["pending", "confirmed"] as ReservationStatus[]).includes(reservation.status)) {
+      throw new ConflictException("Solo se pueden cambiar las mesas de reservas pendientes o confirmadas.");
+    }
+    return reservation;
+  }
+
+  private async listAvailableAssignments(
     client: PrismaService | Prisma.TransactionClient,
     input: {
       restaurantId: string;
@@ -921,7 +1030,7 @@ export class ReservationsService {
       serviceTime?: string;
       durationMinutes?: number;
     }
-  ) {
+  ): Promise<Array<{ tableIds: string[]; tableLabels: string[]; seats: number; features: ReturnType<typeof getSharedTableFeatures> }>> {
     const roomTables = await client.table.findMany({
       where: {
         restaurantId: input.restaurantId,
@@ -956,18 +1065,10 @@ export class ReservationsService {
       .filter((table) => !takenIds.has(table.id))
       .filter((table) => tableMatchesPreferredFeatures(table, preferredFeatures));
 
-    const single = availableTables
+    const singles = availableTables
       .filter((table) => table.seats >= input.partySize)
-      .sort((a, b) => a.seats - b.seats)[0];
-
-    if (single) {
-      return {
-        tableIds: [single.id],
-        tableLabels: [single.label],
-        seats: single.seats,
-        features: getSharedTableFeatures([single])
-      };
-    }
+      .sort((a, b) => a.seats - b.seats)
+      .map((table) => ({ tableIds: [table.id], tableLabels: [table.label], seats: table.seats, features: getSharedTableFeatures([table]) }));
 
     const combinations = await client.tableCombination.findMany({
       where: {
@@ -985,20 +1086,39 @@ export class ReservationsService {
       .filter((combo) => combinationSeats(combo) >= input.partySize)
       .sort((a, b) => combinationSeats(a) - combinationSeats(b));
 
-    if (!validCombos.length) return null;
+    const combos = validCombos.map((combo) => {
+      const tables = [
+        availableTables.find((table) => table.id === combo.parentTableId),
+        availableTables.find((table) => table.id === combo.childTableId)
+      ].filter((table): table is (typeof availableTables)[number] => Boolean(table));
+      return {
+        tableIds: [combo.parentTableId, combo.childTableId].sort(),
+        tableLabels: tables.map((table) => table.label),
+        seats: combinationSeats(combo),
+        features: getSharedTableFeatures(tables)
+      };
+    });
 
-    const selected = validCombos[0];
-    const tables = [
-      availableTables.find((table) => table.id === selected.parentTableId),
-      availableTables.find((table) => table.id === selected.childTableId)
-    ].filter((table): table is (typeof availableTables)[number] => Boolean(table));
+    return [...singles, ...combos].sort((left, right) => left.seats - right.seats);
+  }
 
-    return {
-      tableIds: [selected.parentTableId, selected.childTableId],
-      tableLabels: tables.map((table) => table.label),
-      seats: combinationSeats(selected),
-      features: getSharedTableFeatures(tables)
-    };
+  private async assignTables(
+    client: PrismaService | Prisma.TransactionClient,
+    input: {
+      restaurantId: string;
+      roomId: string;
+      serviceDate: Date;
+      turn: "mediodia" | "noche";
+      partySize: number;
+      preferredZone?: string;
+      preferredFeatures?: PreferredFeature[];
+      excludeReservationId?: string;
+      serviceTime?: string;
+      durationMinutes?: number;
+    }
+  ) {
+    const assignments = await this.listAvailableAssignments(client, input);
+    return assignments.find((assignment) => assignment.tableIds.length === 1) || assignments[0] || null;
   }
   private async upsertCustomer(
     tx: any,

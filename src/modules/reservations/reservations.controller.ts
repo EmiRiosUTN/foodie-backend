@@ -23,6 +23,10 @@ const reservationSchema = z.object({
   notes: z.string().optional()
 });
 
+const reassignTablesSchema = z.object({
+  tableIds: z.array(z.string().min(1)).min(1).max(2)
+});
+
 @Controller()
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
@@ -63,5 +67,15 @@ export class ReservationsController {
   @Post("restaurant/reservations/:reservationId/release")
   release(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string) {
     return this.reservationsService.moveToState(user, reservationId, "completed");
+  }
+
+  @Get("restaurant/reservations/:reservationId/table-options")
+  tableOptions(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string) {
+    return this.reservationsService.listTableOptions(user, reservationId);
+  }
+
+  @Post("restaurant/reservations/:reservationId/reassign-tables")
+  reassignTables(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Body() body: unknown) {
+    return this.reservationsService.reassignTables(user, reservationId, reassignTablesSchema.parse(body).tableIds);
   }
 }

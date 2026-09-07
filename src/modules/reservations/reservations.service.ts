@@ -977,10 +977,13 @@ export class ReservationsService {
       }
     });
     const availableTableIds = new Set(availableTables.map((table) => table.id));
+    const seatsByTableId = new Map(availableTables.map((table) => [table.id, table.seats]));
+    const combinationSeats = (combo: (typeof combinations)[number]) =>
+      (seatsByTableId.get(combo.parentTableId) || 0) + (seatsByTableId.get(combo.childTableId) || 0);
     const validCombos = combinations
       .filter((combo) => availableTableIds.has(combo.parentTableId) && availableTableIds.has(combo.childTableId))
-      .filter((combo) => combo.combinedSeats >= input.partySize)
-      .sort((a, b) => a.combinedSeats - b.combinedSeats);
+      .filter((combo) => combinationSeats(combo) >= input.partySize)
+      .sort((a, b) => combinationSeats(a) - combinationSeats(b));
 
     if (!validCombos.length) return null;
 
@@ -993,7 +996,7 @@ export class ReservationsService {
     return {
       tableIds: [selected.parentTableId, selected.childTableId],
       tableLabels: tables.map((table) => table.label),
-      seats: selected.combinedSeats,
+      seats: combinationSeats(selected),
       features: getSharedTableFeatures(tables)
     };
   }

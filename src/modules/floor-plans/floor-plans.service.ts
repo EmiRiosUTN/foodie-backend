@@ -189,6 +189,77 @@ export class FloorPlansService {
     return { ok: true };
   }
 
+  private async roomOrThrow(restaurantId: string, roomId: string) {
+    const room = await this.prisma.room.findFirst({ where: { id: roomId, restaurantId, isActive: true } });
+    if (!room) throw new NotFoundException("Room not found");
+    return room;
+  }
+
+  private async assertRuleHasNoReservationConflicts(
+    restaurantId: string,
+    roomId: string,
+    input: { weekdays: number[]; turns: Array<"mediodia" | "noche">; startsAt: string; endsAt?: string | null }
+  ) {
+    const startsAt = new Date(input.startsAt);
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        restaurantId,
+        roomId,
+        serviceDate: { gte: startsAt, ...(input.endsAt ? { lte: new Date(input.endsAt) } : {}) },
+        turn: { in: input.turns },
+        status: { notIn: ["cancelled", "completed", "no_show"] }
+      },
+      select: { serviceDate: true, turn: true }
+    });
+    const conflicts = reservations.filter((reservation) => input.weekdays.includes(reservation.serviceDate.getUTCDay()));
+    if (conflicts.length) {
+      const dates = [...new Set(conflicts.slice(0, 5).map((item) => `${item.serviceDate.toISOString().slice(0, 10)} (${item.turn})`))];
+      throw new ConflictException(`No se puede guardar el bloqueo porque hay reservas activas en: ${dates.join(", ")}${conflicts.length > dates.length ? "…" : ""}.`);
+    }
+  }
+
+  async rules(user: RequestUser, roomId: string) {
+    const restaurantId = this.restaurantScope(user);
+    await this.roomOrThrow(restaurantId, roomId);
+    return this.prisma.roomBookingRule.findMany({
+      where: { restaurantId, roomId },
+      orderBy: [{ startsAt: "asc" }, { createdAt: "asc" }]
+    });
+  }
+
+  async createRule(user: RequestUser, roomId: string, input: { weekdays: number[]; turns: Array<"mediodia" | "noche">; startsAt: string; endsAt?: string | null; reason?: string | null }) {
+    const restaurantId = this.restaurantScope(user);
+    const room = await this.roomOrThrow(restaurantId, roomId);
+    await this.assertRuleHasNoReservationConflicts(restaurantId, roomId, input);
+    const rule = await this.prisma.roomBookingRule.create({
+      data: { restaurantId, branchId: room.branchId, roomId, weekdays: input.weekdays, turns: input.turns, startsAt: new Date(input.startsAt), endsAt: input.endsAt ? new Date(input.endsAt) : null, reason: input.reason || null, createdByUserId: user.sub }
+    });
+    await this.bumpAssistantContext(restaurantId);
+    return rule;
+  }
+
+  async updateRule(user: RequestUser, roomId: string, ruleId: string, input: { weekdays: number[]; turns: Array<"mediodia" | "noche">; startsAt: string; endsAt?: string | null; reason?: string | null }) {
+    const restaurantId = this.restaurantScope(user);
+    await this.roomOrThrow(restaurantId, roomId);
+    const existing = await this.prisma.roomBookingRule.findFirst({ where: { id: ruleId, restaurantId, roomId } });
+    if (!existing) throw new NotFoundException("Booking rule not found");
+    await this.assertRuleHasNoReservationConflicts(restaurantId, roomId, input);
+    const rule = await this.prisma.roomBookingRule.update({
+      where: { id: ruleId },
+      data: { weekdays: input.weekdays, turns: input.turns, startsAt: new Date(input.startsAt), endsAt: input.endsAt ? new Date(input.endsAt) : null, reason: input.reason || null, createdByUserId: user.sub }
+    });
+    await this.bumpAssistantContext(restaurantId);
+    return rule;
+  }
+
+  async removeRule(user: RequestUser, roomId: string, ruleId: string) {
+    const restaurantId = this.restaurantScope(user);
+    const result = await this.prisma.roomBookingRule.deleteMany({ where: { id: ruleId, restaurantId, roomId } });
+    if (!result.count) throw new NotFoundException("Booking rule not found");
+    await this.bumpAssistantContext(restaurantId);
+    return { ok: true };
+  }
+
   async update(
     user: RequestUser,
     roomId: string,

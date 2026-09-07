@@ -34,6 +34,14 @@ const roomBlockQuerySchema = z.object({
   turn: z.enum(["mediodia", "noche"])
 });
 
+const roomBookingRuleSchema = z.object({
+  weekdays: z.array(z.number().int().min(0).max(6)).min(1).refine((value) => new Set(value).size === value.length, "Weekdays must be unique"),
+  turns: z.array(z.enum(["mediodia", "noche"])).min(1).refine((value) => new Set(value).size === value.length, "Turns must be unique"),
+  startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  reason: z.string().trim().max(500).nullable().optional()
+}).refine((value) => !value.endsAt || value.endsAt >= value.startsAt, "La fecha de fin debe ser posterior a la fecha de inicio");
+
 const layoutSchema = z.object({
   zones: z.array(
     z.object({
@@ -127,6 +135,29 @@ export class FloorPlansController {
   @Roles("restaurant_owner", "restaurant_manager")
   unblock(@Param("roomId") roomId: string, @Query("serviceDate") serviceDate: string, @Query("turn") turn: string, @CurrentUser() user: RequestUser) {
     return this.floorPlansService.unblock(user, roomId, roomBlockQuerySchema.parse({ serviceDate, turn }));
+  }
+
+  @Get(":roomId/booking-rules")
+  rules(@Param("roomId") roomId: string, @CurrentUser() user: RequestUser) {
+    return this.floorPlansService.rules(user, roomId);
+  }
+
+  @Post(":roomId/booking-rules")
+  @Roles("restaurant_owner", "restaurant_manager")
+  createRule(@Param("roomId") roomId: string, @Body() body: unknown, @CurrentUser() user: RequestUser) {
+    return this.floorPlansService.createRule(user, roomId, roomBookingRuleSchema.parse(body));
+  }
+
+  @Patch(":roomId/booking-rules/:ruleId")
+  @Roles("restaurant_owner", "restaurant_manager")
+  updateRule(@Param("roomId") roomId: string, @Param("ruleId") ruleId: string, @Body() body: unknown, @CurrentUser() user: RequestUser) {
+    return this.floorPlansService.updateRule(user, roomId, ruleId, roomBookingRuleSchema.parse(body));
+  }
+
+  @Delete(":roomId/booking-rules/:ruleId")
+  @Roles("restaurant_owner", "restaurant_manager")
+  removeRule(@Param("roomId") roomId: string, @Param("ruleId") ruleId: string, @CurrentUser() user: RequestUser) {
+    return this.floorPlansService.removeRule(user, roomId, ruleId);
   }
 
   @Delete(":roomId")

@@ -63,8 +63,20 @@ export class ReservationsService {
   }
 
   private async isRoomBlocked(restaurantId: string, roomId: string, serviceDate: Date, turn: "mediodia" | "noche", client: PrismaService | Prisma.TransactionClient = this.prisma) {
-    return Boolean(await client.roomBookingBlock.findUnique({
+    const pointBlock = await client.roomBookingBlock.findUnique({
       where: { roomId_serviceDate_turn: { roomId, serviceDate, turn } },
+      select: { id: true }
+    });
+    if (pointBlock) return true;
+    return Boolean(await client.roomBookingRule.findFirst({
+      where: {
+        restaurantId,
+        roomId,
+        weekdays: { has: serviceDate.getUTCDay() },
+        turns: { has: turn },
+        startsAt: { lte: serviceDate },
+        OR: [{ endsAt: null }, { endsAt: { gte: serviceDate } }]
+      },
       select: { id: true }
     }));
   }
@@ -406,12 +418,16 @@ export class ReservationsService {
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
     const serviceTime = this.normalizeServiceTime(input.serviceTime);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
-    const blockedRooms = await this.prisma.roomBookingBlock.findMany({
-      where: { restaurantId: input.restaurantId, branchId: input.branchId, serviceDate, turn },
-      select: { roomId: true }
-    });
+    const [pointBlocks, recurringBlocks] = await Promise.all([
+      this.prisma.roomBookingBlock.findMany({ where: { restaurantId: input.restaurantId, branchId: input.branchId, serviceDate, turn }, select: { roomId: true } }),
+      this.prisma.roomBookingRule.findMany({
+        where: { restaurantId: input.restaurantId, branchId: input.branchId, weekdays: { has: serviceDate.getUTCDay() }, turns: { has: turn }, startsAt: { lte: serviceDate }, OR: [{ endsAt: null }, { endsAt: { gte: serviceDate } }] },
+        select: { roomId: true }
+      })
+    ]);
+    const blockedRoomIds = [...new Set([...pointBlocks, ...recurringBlocks].map((block) => block.roomId))];
     const rooms = await this.prisma.room.findMany({
-      where: { restaurantId: input.restaurantId, branchId: input.branchId, isActive: true, id: { notIn: blockedRooms.map((block) => block.roomId) } },
+      where: { restaurantId: input.restaurantId, branchId: input.branchId, isActive: true, id: { notIn: blockedRoomIds } },
       orderBy: [{ bookingPriority: "asc" }, { createdAt: "asc" }]
     });
     for (const room of rooms) {

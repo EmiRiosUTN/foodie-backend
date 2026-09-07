@@ -156,6 +156,7 @@ model Restaurant {
   reservations      Reservation[]
   serviceStates     ServiceState[]
   roomBookingBlocks RoomBookingBlock[]
+  roomBookingRules  RoomBookingRule[]
   integrationTokens IntegrationToken[]
   externalApiRequests ExternalApiRequest[]
   giftCardProducts GiftCardProduct[]
@@ -305,6 +306,7 @@ model Branch {
   bookingWindows BookingWindow[]
   bookingExceptions BookingException[]
   roomBookingBlocks RoomBookingBlock[]
+  roomBookingRules  RoomBookingRule[]
   openingHours BranchOpeningHour[]
 
   @@index([restaurantId])
@@ -328,6 +330,7 @@ model Room {
   tables        Table[]
   reservations  Reservation[]
   bookingBlocks RoomBookingBlock[]
+  bookingRules  RoomBookingRule[]
 
   @@index([restaurantId, branchId])
   @@index([branchId, bookingPriority])
@@ -610,6 +613,27 @@ model RoomBookingBlock {
 
   @@unique([roomId, serviceDate, turn])
   @@index([restaurantId, branchId, serviceDate, turn])
+}
+
+model RoomBookingRule {
+  id              String   @id @default(cuid())
+  restaurantId    String
+  branchId        String
+  roomId          String
+  weekdays        Int[]
+  turns           Turn[]
+  startsAt        DateTime
+  endsAt          DateTime?
+  reason          String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch          Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  room            Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, branchId, roomId])
+  @@index([roomId, startsAt, endsAt])
 }
 
 model ReservationTable {

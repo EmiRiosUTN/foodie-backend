@@ -77,6 +77,26 @@ enum BookingExceptionType {
   booking_disabled
 }
 
+enum DepositStatus {
+  pending
+  partial
+  complete
+}
+
+enum DepositEntryType {
+  payment
+  refund
+  adjustment
+}
+
+enum DepositProofRequestStatus {
+  awaiting_proof
+  received
+  fulfilled
+  expired
+  cancelled
+}
+
 enum GiftCardProductType {
   FIXED_MENU
   OPEN_AMOUNT
@@ -154,6 +174,8 @@ model Restaurant {
   customerTags      CustomerTag[]
   chatTagStyles     ChatTagStyle[]
   reservations      Reservation[]
+  deposits          ReservationDeposit[]
+  depositProofs     DepositProof[]
   serviceStates     ServiceState[]
   roomBookingBlocks RoomBookingBlock[]
   roomBookingRules  RoomBookingRule[]
@@ -301,6 +323,7 @@ model Branch {
   rooms        Room[]
   customers    Customer[]
   reservations Reservation[]
+  deposits     ReservationDeposit[]
   onlineBookingSchedules OnlineBookingSchedule[]
   onlineBookingExceptions OnlineBookingException[]
   bookingWindows BookingWindow[]
@@ -591,6 +614,7 @@ model Reservation {
   room           Room                @relation(fields: [roomId], references: [id], onDelete: Cascade)
   customer       Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
   tables         ReservationTable[]
+  deposit        ReservationDeposit?
 
   @@index([restaurantId, branchId, serviceDate, turn])
   @@index([roomId, serviceDate, turn])
@@ -613,6 +637,85 @@ model RoomBookingBlock {
 
   @@unique([roomId, serviceDate, turn])
   @@index([restaurantId, branchId, serviceDate, turn])
+}
+
+model ReservationDeposit {
+  id             String        @id @default(cuid())
+  restaurantId   String
+  branchId       String
+  reservationId  String        @unique
+  requiredAmount Decimal       @db.Decimal(12, 2)
+  paidAmount     Decimal       @default(0) @db.Decimal(12, 2)
+  currency       String        @default("ARS")
+  status         DepositStatus @default(pending)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  restaurant     Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch         Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  reservation    Reservation   @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  entries        DepositEntry[]
+  proofRequests  DepositProofRequest[]
+
+  @@index([restaurantId, branchId, status])
+}
+
+model DepositEntry {
+  id             String           @id @default(cuid())
+  depositId      String
+  type           DepositEntryType @default(payment)
+  amount         Decimal          @db.Decimal(12, 2)
+  paidAt         DateTime
+  paymentMethod  String
+  reference      String?
+  notes          String?
+  createdByUserId String?
+  createdAt      DateTime         @default(now())
+  deposit        ReservationDeposit @relation(fields: [depositId], references: [id], onDelete: Cascade)
+  proofs         DepositProof[]
+
+  @@index([depositId, paidAt])
+}
+
+model DepositProofRequest {
+  id             String                    @id @default(cuid())
+  depositId      String
+  restaurantId   String
+  reservationId  String
+  phone          String
+  status         DepositProofRequestStatus @default(awaiting_proof)
+  expiresAt      DateTime
+  source         String                    @default("whatsapp")
+  createdByUserId String?
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+  deposit        ReservationDeposit        @relation(fields: [depositId], references: [id], onDelete: Cascade)
+  proofs         DepositProof[]
+
+  @@index([restaurantId, phone, status, expiresAt])
+  @@index([reservationId])
+}
+
+model DepositProof {
+  id             String   @id @default(cuid())
+  restaurantId   String
+  requestId      String
+  entryId        String?
+  objectKey      String   @unique
+  originalName   String
+  mimeType       String
+  size           Int
+  messageId      String?
+  caption        String?
+  receivedAt     DateTime @default(now())
+  reviewedAt     DateTime?
+  reviewedByUserId String?
+  restaurant     Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  request        DepositProofRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  entry          DepositEntry?       @relation(fields: [entryId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, reviewedAt, receivedAt])
+  @@index([requestId])
 }
 
 model RoomBookingRule {

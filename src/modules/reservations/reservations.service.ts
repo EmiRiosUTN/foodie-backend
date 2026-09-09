@@ -99,7 +99,8 @@ export class ReservationsService {
       include: {
         room: true,
         customer: { include: { tags: true } },
-        tables: { include: { table: true } }
+        tables: { include: { table: true } },
+        deposit: { select: { id: true, requiredAmount: true, paidAmount: true, currency: true, status: true } }
       },
       orderBy: [{ serviceTime: "asc" }, { createdAt: "desc" }]
     });
@@ -155,7 +156,8 @@ export class ReservationsService {
         branch: true,
         room: true,
         customer: { include: { tags: true } },
-        tables: { include: { table: true } }
+        tables: { include: { table: true } },
+        deposit: { select: { id: true, requiredAmount: true, paidAmount: true, currency: true, status: true } }
       },
       orderBy: [{ serviceDate: "desc" }, { serviceTime: "asc" }, { createdAt: "desc" }],
       take: 1000

@@ -14,6 +14,7 @@ import { OnlineBookingsModule } from "./online-bookings/online-bookings.module";
 import { RestaurantConfigurationModule } from "./restaurant-configuration/restaurant-configuration.module";
 import { GiftCardsModule } from "./gift-cards/gift-cards.module";
 import { ChatTagStylesModule } from "./chat-tag-styles/chat-tag-styles.module";
+import { DepositsModule } from "./deposits/deposits.module";
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { ChatTagStylesModule } from "./chat-tag-styles/chat-tag-styles.module";
     RestaurantConfigurationModule,
     GiftCardsModule,
     ChatTagStylesModule,
+    DepositsModule,
     AuditModule
   ]
 })

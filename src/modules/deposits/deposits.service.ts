@@ -10,6 +10,7 @@ const allowedMimeTypes = new Set(["application/pdf", "image/jpeg", "image/png", 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const financialRoles = new Set(["restaurant_owner", "restaurant_manager", "cashier"]);
 const numeric = (value: Prisma.Decimal | number) => Number(value);
+const normalizedPhone = (value: string) => value.replace(/\D/g, "");
 
 @Injectable()
 export class DepositsService {
@@ -72,7 +73,7 @@ export class DepositsService {
     const deposit = await this.prisma.reservationDeposit.findFirst({ where: { id: depositId, restaurantId: this.restaurantId(user) }, include: { reservation: true } });
     if (!deposit) throw new NotFoundException("Deposit not found");
     await this.prisma.depositProofRequest.updateMany({ where: { depositId, status: "awaiting_proof" }, data: { status: "cancelled" } });
-    return this.prisma.depositProofRequest.create({ data: { depositId, restaurantId: deposit.restaurantId, reservationId: deposit.reservationId, phone: deposit.reservation.phone, expiresAt: new Date(Date.now() + expiresHours * 3600_000), createdByUserId: user.sub } });
+    return this.prisma.depositProofRequest.create({ data: { depositId, restaurantId: deposit.restaurantId, reservationId: deposit.reservationId, phone: normalizedPhone(deposit.reservation.phone), expiresAt: new Date(Date.now() + expiresHours * 3600_000), createdByUserId: user.sub } });
   }
 
   async list(user: RequestUser, input: { branchId?: string; status?: DepositStatus; pendingProofs?: boolean }) {
@@ -92,7 +93,7 @@ export class DepositsService {
 
   async externalOpenRequest(apiKeyRestaurantId: string, phone: string) {
     const now = new Date();
-    return this.prisma.depositProofRequest.findFirst({ where: { restaurantId: apiKeyRestaurantId, phone, status: "awaiting_proof", expiresAt: { gt: now } }, orderBy: { createdAt: "desc" } });
+    return this.prisma.depositProofRequest.findFirst({ where: { restaurantId: apiKeyRestaurantId, phone: normalizedPhone(phone), status: "awaiting_proof", expiresAt: { gt: now } }, orderBy: { createdAt: "desc" } });
   }
   async externalUploadUrl(restaurantId: string, requestId: string, input: { fileName: string; mimeType: string; size: number }) {
     const request = await this.prisma.depositProofRequest.findFirst({ where: { id: requestId, restaurantId, status: "awaiting_proof", expiresAt: { gt: new Date() } } });
@@ -109,8 +110,9 @@ export class DepositsService {
     await this.prisma.depositProofRequest.update({ where: { id: requestId }, data: { status: "received" } });
     return { proofId: proof.id, status: "received_for_review" };
   }
-  async reminderEligibility(restaurantId: string, reservationId: string) {
-    const reservation = await this.prisma.reservation.findFirst({ where: { id: reservationId, restaurantId }, include: { deposit: true } });
+  async reminderEligibility(restaurantId: string, reservationCode: string) {
+    if (!reservationCode?.trim()) return { eligible: false };
+    const reservation = await this.prisma.reservation.findFirst({ where: { code: reservationCode.trim(), restaurantId }, include: { deposit: true } });
     return { eligible: Boolean(reservation && reservation.status === "confirmed" && (!reservation.deposit || reservation.deposit.status === "complete")) };
   }
 }

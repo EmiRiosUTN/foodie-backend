@@ -21,7 +21,17 @@ const reservationSchema = z.object({
   preferredZone: z.string().optional(),
   preferredTags: z.array(z.string()).optional(),
   birthday: z.string().optional(),
-  notes: z.string().optional()
+  notes: z.string().optional(),
+  tableIds: z.array(z.string().min(1)).min(1).optional()
+});
+
+const availableTableOptionsSchema = z.object({
+  branchId: z.string().min(1),
+  roomId: z.string().min(1),
+  partySize: z.coerce.number().int().min(1),
+  serviceDate: z.string().min(1),
+  serviceTime: z.string().regex(/^\d{2}:\d{2}$/),
+  preferredZone: z.string().optional()
 });
 
 const reassignTablesSchema = z.object({
@@ -58,6 +68,11 @@ export class ReservationsController {
   @Post("restaurant/reservations")
   create(@CurrentUser() user: RequestUser, @Body() body: unknown) {
     return this.reservationsService.create(user, reservationSchema.parse(body));
+  }
+
+  @Get("restaurant/reservations/available-table-options")
+  availableTableOptions(@CurrentUser() user: RequestUser, @Query() query: Record<string, unknown>) {
+    return this.reservationsService.listManualTableOptions(user, availableTableOptionsSchema.parse(query));
   }
 
   @Post("restaurant/reservations/:reservationId/check-in")

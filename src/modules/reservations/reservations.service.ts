@@ -182,6 +182,7 @@ export class ReservationsService {
       birthday?: string;
       notes?: string;
       durationMinutes?: number;
+      tableIds?: string[];
     }
   ) {
     const restaurantId = this.restaurantScope(user);
@@ -206,6 +207,7 @@ export class ReservationsService {
       birthday?: string;
       notes?: string;
       durationMinutes?: number;
+      tableIds?: string[];
     },
     options?: { actorUserId?: string; idempotencyKey?: string; source?: ReservationSource }
   ) {
@@ -228,16 +230,15 @@ export class ReservationsService {
     const durationMinutes = input.durationMinutes || 180;
 
     const preferredFeatures = input.preferredFeatures || [];
-    const requestedAssignment = await this.assignTables(this.prisma, {
-      restaurantId,
-      roomId: input.roomId,
-      serviceDate,
-      turn,
-      partySize: input.partySize,
-      preferredZone: input.preferredZone,
-      preferredFeatures
-      , serviceTime, durationMinutes
-    });
+    const requestedAssignment = input.tableIds?.length
+      ? await this.findRequestedAssignment(this.prisma, {
+          restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
+          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+        }, input.tableIds)
+      : await this.assignTables(this.prisma, {
+          restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
+          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+        });
 
     if (!requestedAssignment) {
       const generalAssignment = preferredFeatures.length
@@ -251,6 +252,9 @@ export class ReservationsService {
             , serviceTime, durationMinutes
           })
         : null;
+      if (input.tableIds?.length) {
+        throw new ConflictException("La mesa o combinación seleccionada ya no está disponible o no cumple las reglas de la reserva.");
+      }
       if (preferredFeatures.length) {
         throw new ConflictException({
           code: "PREFERRED_FEATURE_UNAVAILABLE",
@@ -267,18 +271,19 @@ export class ReservationsService {
       // requests from both seeing the same last table before either commits.
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Table" WHERE "roomId" = ${input.roomId} FOR UPDATE`);
       await this.assertRoomIsBookable(restaurantId, input.roomId, serviceDate, turn, tx);
-      const assignment = await this.assignTables(tx, {
-        restaurantId,
-        roomId: input.roomId,
-        serviceDate,
-        turn,
-        partySize: input.partySize,
-        preferredZone: input.preferredZone,
-        preferredFeatures,
-        serviceTime,
-        durationMinutes
-      });
+      const assignment = input.tableIds?.length
+        ? await this.findRequestedAssignment(tx, {
+            restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
+            preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+          }, input.tableIds)
+        : await this.assignTables(tx, {
+            restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
+            preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+          });
       if (!assignment) {
+        if (input.tableIds?.length) {
+          throw new ConflictException("La mesa o combinación seleccionada dejó de estar disponible o no cumple las reglas de la reserva.");
+        }
         const generalAssignment = preferredFeatures.length
           ? await this.assignTables(tx, {
               restaurantId,
@@ -400,6 +405,43 @@ export class ReservationsService {
     });
 
     return reservation;
+  }
+
+  async listManualTableOptions(user: RequestUser, input: {
+    branchId: string;
+    roomId: string;
+    partySize: number;
+    serviceDate: string;
+    serviceTime: string;
+    preferredZone?: string;
+  }) {
+    const restaurantId = this.restaurantScope(user);
+    const serviceDate = new Date(input.serviceDate);
+    if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
+    const turn = this.deriveTurnFromServiceTime(input.serviceTime);
+    await this.validateBookingException(restaurantId, input.branchId, serviceDate, input.serviceTime);
+    await this.assertRoomIsBookable(restaurantId, input.roomId, serviceDate, turn);
+    const room = await this.prisma.room.findFirst({ where: { id: input.roomId, restaurantId, branchId: input.branchId, isActive: true } });
+    if (!room) throw new NotFoundException("Room not found");
+    const options = await this.listAvailableAssignments(this.prisma, {
+      restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
+      preferredZone: input.preferredZone, serviceTime: input.serviceTime, durationMinutes: 180
+    });
+    return options.map((option) => ({ ...option, combination: option.tableIds.length > 1 }));
+  }
+
+  private async findRequestedAssignment(
+    client: PrismaService | Prisma.TransactionClient,
+    input: {
+      restaurantId: string; roomId: string; serviceDate: Date; turn: "mediodia" | "noche"; partySize: number;
+      preferredZone?: string; preferredFeatures?: PreferredFeature[]; serviceTime?: string; durationMinutes?: number;
+    },
+    tableIds: string[]
+  ) {
+    const normalized = [...new Set(tableIds)].sort();
+    if (normalized.length !== tableIds.length) throw new BadRequestException("Las mesas seleccionadas están repetidas.");
+    const options = await this.listAvailableAssignments(client, input);
+    return options.find((option) => option.tableIds.join("|") === normalized.join("|")) || null;
   }
 
   private timeToMinutes(serviceTime: string) {

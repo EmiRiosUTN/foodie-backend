@@ -1105,10 +1105,14 @@ export class ReservationsService {
       .filter((table) => !takenIds.has(table.id))
       .filter((table) => tableMatchesPreferredFeatures(table, preferredFeatures));
 
+    const tableCapacity = (table: { seats: number; metadata?: unknown }) => {
+      const metadata = (table.metadata || {}) as { capacity?: { maxPartySize?: number } };
+      return Math.max(1, metadata.capacity?.maxPartySize || table.seats);
+    };
     const singles = availableTables
-      .filter((table) => table.seats >= input.partySize)
-      .sort((a, b) => a.seats - b.seats)
-      .map((table) => ({ tableIds: [table.id], tableLabels: [table.label], seats: table.seats, features: getSharedTableFeatures([table]) }));
+      .filter((table) => tableCapacity(table) >= input.partySize)
+      .sort((a, b) => tableCapacity(a) - tableCapacity(b))
+      .map((table) => ({ tableIds: [table.id], tableLabels: [table.label], seats: tableCapacity(table), features: getSharedTableFeatures([table]) }));
 
     const combinations = await client.tableCombination.findMany({
       where: {
@@ -1117,25 +1121,34 @@ export class ReservationsService {
         childTable: { roomId: input.roomId }
       }
     });
-    const availableTableIds = new Set(availableTables.map((table) => table.id));
-    const combinationSeats = (combo: (typeof combinations)[number]) => combo.combinedSeats;
-    const validCombos = combinations
-      .filter((combo) => availableTableIds.has(combo.parentTableId) && availableTableIds.has(combo.childTableId))
-      .filter((combo) => combinationSeats(combo) >= input.partySize)
-      .sort((a, b) => combinationSeats(a) - combinationSeats(b));
+    const availableById = new Map(availableTables.map((table) => [table.id, table]));
+    const adjacency = new Map<string, Set<string>>();
+    for (const combo of combinations) {
+      if (!availableById.has(combo.parentTableId) || !availableById.has(combo.childTableId)) continue;
+      if (!adjacency.has(combo.parentTableId)) adjacency.set(combo.parentTableId, new Set());
+      if (!adjacency.has(combo.childTableId)) adjacency.set(combo.childTableId, new Set());
+      adjacency.get(combo.parentTableId)!.add(combo.childTableId);
+      adjacency.get(combo.childTableId)!.add(combo.parentTableId);
+    }
 
-    const combos = validCombos.map((combo) => {
-      const tables = [
-        availableTables.find((table) => table.id === combo.parentTableId),
-        availableTables.find((table) => table.id === combo.childTableId)
-      ].filter((table): table is (typeof availableTables)[number] => Boolean(table));
-      return {
-        tableIds: [combo.parentTableId, combo.childTableId].sort(),
-        tableLabels: tables.map((table) => table.label),
-        seats: combinationSeats(combo),
-        features: getSharedTableFeatures(tables)
-      };
-    });
+    // Every emitted set is connected: expand a set only through a neighbour of a member.
+    const visited = new Set<string>();
+    const combos: Array<{ tableIds: string[]; tableLabels: string[]; seats: number; features: ReturnType<typeof getSharedTableFeatures> }> = [];
+    const explore = (ids: string[]) => {
+      const sortedIds = [...ids].sort();
+      const key = sortedIds.join("|");
+      if (visited.has(key)) return;
+      visited.add(key);
+      const tables = sortedIds.map((id) => availableById.get(id)!).filter(Boolean);
+      const seats = tables.reduce((total, table) => total + tableCapacity(table), 0);
+      if (tables.length > 1 && seats >= input.partySize) {
+        combos.push({ tableIds: sortedIds, tableLabels: tables.map((table) => table.label), seats, features: getSharedTableFeatures(tables) });
+      }
+      const nextIds = new Set<string>();
+      for (const id of sortedIds) adjacency.get(id)?.forEach((neighbour) => { if (!sortedIds.includes(neighbour)) nextIds.add(neighbour); });
+      nextIds.forEach((id) => explore([...sortedIds, id]));
+    };
+    adjacency.forEach((_neighbours, id) => explore([id]));
 
     return [...singles, ...combos].sort((left, right) => left.seats - right.seats);
   }

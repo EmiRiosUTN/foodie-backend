@@ -25,7 +25,7 @@ const reservationSchema = z.object({
 });
 
 const reassignTablesSchema = z.object({
-  tableIds: z.array(z.string().min(1)).min(1).max(2)
+  tableIds: z.array(z.string().min(1)).min(1)
 });
 
 @Controller()

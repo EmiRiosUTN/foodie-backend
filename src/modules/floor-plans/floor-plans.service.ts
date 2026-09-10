@@ -135,6 +135,11 @@ export class FloorPlansService {
     return room;
   }
 
+  private tableCapacity(table: { seats: number; metadata?: Record<string, unknown> }) {
+    const metadata = (table.metadata || {}) as TableMetadata;
+    return Math.max(1, metadata.capacity?.maxPartySize || table.seats);
+  }
+
   async reorder(user: RequestUser, input: { branchId: string; roomIds: string[] }) {
     const restaurantId = this.restaurantScope(user);
     const rooms = await this.prisma.room.findMany({
@@ -374,6 +379,31 @@ export class FloorPlansService {
     });
     if (!room) throw new NotFoundException("Room not found");
 
+    const normalizedCombinations = (() => {
+      const tablesById = new Map(input.tables.map((table) => [table.id, table]));
+      const seen = new Set<string>();
+      return input.combinations.map((item) => {
+        if (item.parentTableId === item.childTableId) {
+          throw new ConflictException("Una mesa no puede ser compatible consigo misma.");
+        }
+        const left = tablesById.get(item.parentTableId);
+        const right = tablesById.get(item.childTableId);
+        if (!left || !right) {
+          throw new ConflictException("Las mesas compatibles deben pertenecer al mismo salón.");
+        }
+        const [parentTableId, childTableId] = [left.id, right.id].sort();
+        const key = `${parentTableId}|${childTableId}`;
+        if (seen.has(key)) throw new ConflictException("La compatibilidad entre estas mesas está repetida.");
+        seen.add(key);
+        return {
+          id: item.id,
+          parentTableId,
+          childTableId,
+          combinedSeats: this.tableCapacity(left) + this.tableCapacity(right)
+        };
+      });
+    })();
+
     const result = await this.prisma.$transaction(async (tx) => {
       const existingTables = await tx.table.findMany({
         where: { restaurantId, roomId },
@@ -530,9 +560,9 @@ export class FloorPlansService {
         });
       }
 
-      if (input.combinations.length) {
+      if (normalizedCombinations.length) {
         await tx.tableCombination.createMany({
-          data: input.combinations.map((item) => ({
+          data: normalizedCombinations.map((item) => ({
             id: item.id,
             restaurantId,
             parentTableId: item.parentTableId,

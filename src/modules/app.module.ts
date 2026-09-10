@@ -15,6 +15,7 @@ import { RestaurantConfigurationModule } from "./restaurant-configuration/restau
 import { GiftCardsModule } from "./gift-cards/gift-cards.module";
 import { ChatTagStylesModule } from "./chat-tag-styles/chat-tag-styles.module";
 import { DepositsModule } from "./deposits/deposits.module";
+import { DocumentsModule } from "./documents/documents.module";
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { DepositsModule } from "./deposits/deposits.module";
     GiftCardsModule,
     ChatTagStylesModule,
     DepositsModule,
+    DocumentsModule,
     AuditModule
   ]
 })

@@ -60,7 +60,7 @@ export class DepositsService {
     if (!deposit) throw new NotFoundException("Deposit not found");
     const result = await this.prisma.$transaction(async (tx) => {
       const entry = await tx.depositEntry.create({ data: { depositId, type: input.type, amount: input.amount, paidAt: new Date(input.paidAt), paymentMethod: input.paymentMethod.trim(), reference: input.reference?.trim() || null, notes: input.notes?.trim() || null, createdByUserId: user.sub } });
-      if (input.proofIds?.length) await tx.depositProof.updateMany({ where: { id: { in: input.proofIds }, restaurantId: deposit.restaurantId, entryId: null }, data: { entryId: entry.id, reviewedAt: new Date(), reviewedByUserId: user.sub } });
+      if (input.proofIds?.length) await tx.depositProof.updateMany({ where: { id: { in: input.proofIds }, restaurantId: deposit.restaurantId, entryId: null }, data: { entryId: entry.id, reviewedAt: new Date(), reviewedByUserId: user.sub, reviewStatus: "approved", rejectionReason: null } });
       const updated = await this.refreshDeposit(depositId, tx);
       return { entry, deposit: updated };
     });
@@ -89,6 +89,38 @@ export class DepositsService {
     const proof = await this.prisma.depositProof.findFirst({ where: { id: proofId, restaurantId: this.restaurantId(user) } });
     if (!proof) throw new NotFoundException("Proof not found");
     return { url: await this.storage.downloadUrl(proof.objectKey, proof.originalName) };
+  }
+
+  async approveProof(user: RequestUser, proofId: string, input: { amount: number; paidAt: string; paymentMethod: string; reference?: string; notes?: string }) {
+    this.assertFinancial(user);
+    if (!Number.isFinite(input.amount) || input.amount <= 0) throw new BadRequestException("Amount must be positive");
+    const proof = await this.prisma.depositProof.findFirst({ where: { id: proofId, restaurantId: this.restaurantId(user) }, include: { request: { include: { deposit: true } } } });
+    if (!proof) throw new NotFoundException("Proof not found");
+    if (proof.reviewStatus !== "pending_review") throw new BadRequestException("Proof was already reviewed");
+    const result = await this.prisma.$transaction(async (tx) => {
+      const entry = await tx.depositEntry.create({ data: { depositId: proof.request.depositId, type: "payment", amount: input.amount, paidAt: new Date(input.paidAt), paymentMethod: input.paymentMethod.trim(), reference: input.reference?.trim() || null, notes: input.notes?.trim() || null, createdByUserId: user.sub } });
+      await tx.depositProof.update({ where: { id: proof.id }, data: { entryId: entry.id, reviewStatus: "approved", reviewedAt: new Date(), reviewedByUserId: user.sub, rejectionReason: null } });
+      await tx.depositProofRequest.update({ where: { id: proof.requestId }, data: { status: "fulfilled" } });
+      const deposit = await this.refreshDeposit(proof.request.depositId, tx);
+      return { entry, deposit };
+    });
+    await this.audit.log({ action: "deposit.proof_approved", targetType: "deposit_proof", targetId: proofId, restaurantId: proof.restaurantId, restaurantUserId: user.sub, metadata: { entryId: result.entry.id, amount: input.amount } });
+    return result;
+  }
+
+  async rejectProof(user: RequestUser, proofId: string, reason: string) {
+    this.assertFinancial(user);
+    const proof = await this.prisma.depositProof.findFirst({ where: { id: proofId, restaurantId: this.restaurantId(user) }, include: { request: true } });
+    if (!proof) throw new NotFoundException("Proof not found");
+    if (proof.reviewStatus !== "pending_review") throw new BadRequestException("Proof was already reviewed");
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const item = await tx.depositProof.update({ where: { id: proofId }, data: { reviewStatus: "rejected", reviewedAt: now, reviewedByUserId: user.sub, rejectionReason: reason.trim() } });
+      if (proof.request.expiresAt > now) await tx.depositProofRequest.update({ where: { id: proof.requestId }, data: { status: "awaiting_proof" } });
+      return item;
+    });
+    await this.audit.log({ action: "deposit.proof_rejected", targetType: "deposit_proof", targetId: proofId, restaurantId: proof.restaurantId, restaurantUserId: user.sub, metadata: { reason: reason.trim() } });
+    return updated;
   }
 
   async externalOpenRequest(apiKeyRestaurantId: string, phone: string) {

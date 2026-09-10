@@ -97,6 +97,35 @@ enum DepositProofRequestStatus {
   cancelled
 }
 
+enum DepositProofReviewStatus {
+  pending_review
+  approved
+  rejected
+}
+
+enum DocumentCategory {
+  deposit_proof
+  cv
+  price_list
+  menu
+  invoice
+  contract
+  supplier
+  other
+}
+
+enum DocumentOrigin {
+  chat
+  manual
+  n8n
+}
+
+enum DocumentStatus {
+  inbox
+  active
+  archived
+}
+
 enum GiftCardProductType {
   FIXED_MENU
   OPEN_AMOUNT
@@ -176,6 +205,7 @@ model Restaurant {
   reservations      Reservation[]
   deposits          ReservationDeposit[]
   depositProofs     DepositProof[]
+  documents         Document[]
   serviceStates     ServiceState[]
   roomBookingBlocks RoomBookingBlock[]
   roomBookingRules  RoomBookingRule[]
@@ -324,6 +354,7 @@ model Branch {
   customers    Customer[]
   reservations Reservation[]
   deposits     ReservationDeposit[]
+  documents    Document[]
   onlineBookingSchedules OnlineBookingSchedule[]
   onlineBookingExceptions OnlineBookingException[]
   bookingWindows BookingWindow[]
@@ -710,12 +741,48 @@ model DepositProof {
   receivedAt     DateTime @default(now())
   reviewedAt     DateTime?
   reviewedByUserId String?
+  reviewStatus   DepositProofReviewStatus @default(pending_review)
+  rejectionReason String?
+  documentId     String?  @unique
   restaurant     Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   request        DepositProofRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   entry          DepositEntry?       @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  document       Document?           @relation(fields: [documentId], references: [id], onDelete: SetNull)
 
   @@index([restaurantId, reviewedAt, receivedAt])
   @@index([requestId])
+}
+
+model Document {
+  id                    String           @id @default(cuid())
+  restaurantId          String
+  branchId              String?
+  category              DocumentCategory @default(other)
+  suggestedCategory     DocumentCategory?
+  suggestionConfidence  Float?
+  origin                DocumentOrigin
+  status                DocumentStatus   @default(inbox)
+  objectKey             String           @unique
+  originalName          String
+  mimeType              String
+  size                  Int
+  contactName           String?
+  contactPhone          String?
+  externalMessageId     String?
+  caption               String?
+  depositProofRequestId String?
+  createdByUserId       String?
+  archivedAt            DateTime?
+  archivedByUserId      String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  restaurant            Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch                Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  depositProof          DepositProof?
+
+  @@unique([restaurantId, externalMessageId])
+  @@index([restaurantId, status, category, createdAt])
+  @@index([restaurantId, contactPhone])
 }
 
 model RoomBookingRule {

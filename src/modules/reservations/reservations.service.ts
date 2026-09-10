@@ -452,6 +452,44 @@ export class ReservationsService {
     return this.moveReservationToStateForRestaurant(restaurantId, { reservationId }, next, { actorUserId: user.sub });
   }
 
+  async deleteCancelled(user: RequestUser, reservationId: string) {
+    const restaurantId = this.restaurantScope(user);
+    if (!new Set(["restaurant_owner", "restaurant_manager"]).has(String(user.role))) {
+      throw new ForbiddenException("Solo el dueño o gerente puede eliminar reservas");
+    }
+
+    const reservation = await this.prisma.reservation.findFirst({
+      where: { id: reservationId, restaurantId },
+      include: { deposit: { select: { id: true } } }
+    });
+    if (!reservation) throw new NotFoundException("Reservation not found");
+    if (reservation.status !== "cancelled") {
+      throw new ConflictException("Solo se pueden eliminar reservas canceladas");
+    }
+    if (reservation.deposit) {
+      throw new ConflictException("No se puede eliminar una reserva con seña, pagos o comprobantes asociados");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.serviceState.updateMany({
+        where: { restaurantId, reservationId: reservation.id },
+        data: { status: "free", reservationId: null }
+      });
+      await tx.reservation.delete({ where: { id: reservation.id } });
+    });
+
+    this.realtimeService.publish("reservation.deleted", { restaurantId, reservationId: reservation.id });
+    await this.auditService.log({
+      action: "reservation.deleted",
+      targetType: "reservation",
+      targetId: reservation.id,
+      restaurantId,
+      restaurantUserId: user.sub,
+      metadata: { code: reservation.code, status: reservation.status }
+    });
+    return { id: reservation.id, code: reservation.code, deleted: true };
+  }
+
   async listTableOptions(user: RequestUser, reservationId: string) {
     const restaurantId = this.restaurantScope(user);
     const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);

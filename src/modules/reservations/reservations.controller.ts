@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, Query } from "@nestjs/common";
 import { ReservationsService } from "./reservations.service";
 import { CurrentUser } from "../../common/auth/current-user.decorator";
+import { Roles } from "../../common/auth/roles.decorator";
 import type { RequestUser } from "../../common/auth/request-user";
 import { z } from "zod";
 
@@ -67,6 +68,12 @@ export class ReservationsController {
   @Post("restaurant/reservations/:reservationId/release")
   release(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string) {
     return this.reservationsService.moveToState(user, reservationId, "completed");
+  }
+
+  @Delete("restaurant/reservations/:reservationId")
+  @Roles("restaurant_owner", "restaurant_manager")
+  remove(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string) {
+    return this.reservationsService.deleteCancelled(user, reservationId);
   }
 
   @Get("restaurant/reservations/:reservationId/table-options")

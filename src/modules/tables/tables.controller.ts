@@ -11,6 +11,7 @@ const serviceStateSchema = z.object({
   reservationId: z.string().optional().nullable(),
   serviceDate: z.string().min(1),
   turn: z.enum(["mediodia", "noche"]),
+  specialServiceId: z.string().min(1).optional().nullable(),
   status: z.enum(["free", "reserved", "occupied", "blocked"])
 });
 
@@ -23,9 +24,10 @@ export class TablesController {
     @CurrentUser() user: RequestUser,
     @Query("branchId") branchId: string,
     @Query("serviceDate") serviceDate: string,
-    @Query("turn") turn: "mediodia" | "noche"
+    @Query("turn") turn: "mediodia" | "noche",
+    @Query("specialServiceId") specialServiceId?: string
   ) {
-    return this.tablesService.listStates(user, { branchId, serviceDate, turn });
+    return this.tablesService.listStates(user, { branchId, serviceDate, turn, specialServiceId });
   }
 
   @Post("states")

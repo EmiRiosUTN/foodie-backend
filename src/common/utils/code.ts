@@ -1,7 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 
 export function createReservationCode() {
-  return `${randomBytes(2).toString("hex").toUpperCase()}-${randomBytes(2).toString("hex").toUpperCase()}`;
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from(randomBytes(6), (byte) => alphabet[byte & 31]).join("");
+}
+
+export function normalizeReservationCode(value: string) {
+  return value.trim().toUpperCase();
 }
 
 export function createApiToken() {

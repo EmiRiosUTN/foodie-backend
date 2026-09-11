@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import type { RequestUser } from "../../common/auth/request-user";
-import { createReservationCode } from "../../common/utils/code";
+import { createReservationCode, normalizeReservationCode } from "../../common/utils/code";
 import { RealtimeService } from "../realtime/realtime.service";
 import { AuditService } from "../audit/audit.service";
 import { Prisma, ReservationSource, ReservationStatus } from "@prisma/client";
@@ -87,7 +87,7 @@ export class ReservationsService {
     }
   }
 
-  list(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
+  list(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche"; specialServiceId?: string }) {
     const restaurantId = this.restaurantScope(user);
     return this.prisma.reservation.findMany({
       where: {
@@ -95,11 +95,13 @@ export class ReservationsService {
         branchId: input.branchId,
         serviceDate: new Date(input.serviceDate),
         turn: input.turn
+        , ...(input.specialServiceId ? { specialServiceId: input.specialServiceId } : {})
       },
       include: {
         room: true,
         customer: { include: { tags: true } },
         tables: { include: { table: true } },
+        specialService: true,
         deposit: { select: { id: true, requiredAmount: true, paidAmount: true, currency: true, status: true } }
       },
       orderBy: [{ serviceTime: "asc" }, { createdAt: "desc" }]
@@ -126,6 +128,7 @@ export class ReservationsService {
     }
 
     const search = input.search?.trim();
+    const normalizedSearch = search ? this.normalizeReservationCode(search) : undefined;
 
     return this.prisma.reservation.findMany({
       where: {
@@ -147,7 +150,7 @@ export class ReservationsService {
                 { fullName: { contains: search, mode: "insensitive" } },
                 { phone: { contains: search, mode: "insensitive" } },
                 { email: { contains: search, mode: "insensitive" } },
-                { code: { contains: search, mode: "insensitive" } }
+                { codeNormalized: { contains: normalizedSearch } }
               ]
             }
           : {})
@@ -157,6 +160,7 @@ export class ReservationsService {
         room: true,
         customer: { include: { tags: true } },
         tables: { include: { table: true } },
+        specialService: true,
         deposit: { select: { id: true, requiredAmount: true, paidAmount: true, currency: true, status: true } }
       },
       orderBy: [{ serviceDate: "desc" }, { serviceTime: "asc" }, { createdAt: "desc" }],
@@ -182,6 +186,7 @@ export class ReservationsService {
       birthday?: string;
       notes?: string;
       durationMinutes?: number;
+      turnoverMinutes?: number;
       tableIds?: string[];
       manualTableSelection?: boolean;
     }
@@ -208,6 +213,7 @@ export class ReservationsService {
       birthday?: string;
       notes?: string;
       durationMinutes?: number;
+      turnoverMinutes?: number;
       tableIds?: string[];
       manualTableSelection?: boolean;
     },
@@ -227,22 +233,24 @@ export class ReservationsService {
     }
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
-    await this.validateBookingException(restaurantId, input.branchId, serviceDate, serviceTime);
+    const specialService = await this.resolveSpecialService(restaurantId, input.branchId, serviceDate, serviceTime);
+    if (!specialService) await this.validateBookingException(restaurantId, input.branchId, serviceDate, serviceTime);
     await this.assertRoomIsBookable(restaurantId, input.roomId, serviceDate, turn);
-    const durationMinutes = input.durationMinutes || 180;
+    const durationMinutes = specialService?.durationMinutes || input.durationMinutes || 180;
+    const turnoverMinutes = specialService?.turnoverMinutes || 0;
 
     const preferredFeatures = input.preferredFeatures || [];
     const requestedAssignment = input.tableIds?.length
       ? await (input.manualTableSelection ? this.findManualRequestedAssignment(this.prisma, {
           restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
-          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes, turnoverMinutes
         }, input.tableIds) : this.findRequestedAssignment(this.prisma, {
           restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
-          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes, turnoverMinutes
         }, input.tableIds))
       : await this.assignTables(this.prisma, {
           restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
-          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes, turnoverMinutes
         });
 
     if (!requestedAssignment) {
@@ -254,7 +262,7 @@ export class ReservationsService {
             turn,
             partySize: input.partySize,
             preferredZone: input.preferredZone
-            , serviceTime, durationMinutes
+            , serviceTime, durationMinutes, turnoverMinutes
           })
         : null;
       if (input.tableIds?.length) {
@@ -279,14 +287,14 @@ export class ReservationsService {
       const assignment = input.tableIds?.length
         ? await (input.manualTableSelection ? this.findManualRequestedAssignment(tx, {
             restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
-            preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+            preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes, turnoverMinutes
           }, input.tableIds) : this.findRequestedAssignment(tx, {
             restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
-            preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+            preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes, turnoverMinutes
           }, input.tableIds))
         : await this.assignTables(tx, {
             restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
-            preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes
+          preferredZone: input.preferredZone, preferredFeatures, serviceTime, durationMinutes, turnoverMinutes
           });
       if (!assignment) {
         if (input.tableIds?.length) {
@@ -301,7 +309,8 @@ export class ReservationsService {
               partySize: input.partySize,
               preferredZone: input.preferredZone,
               serviceTime,
-              durationMinutes
+              durationMinutes,
+              turnoverMinutes
             })
           : null;
         if (preferredFeatures.length) {
@@ -318,6 +327,7 @@ export class ReservationsService {
         ...input,
         email: this.normalizeOptionalEmail(input.email)
       };
+      const reservationCode = await this.createAvailableReservationCode(tx);
       const customer = await this.upsertCustomer(tx, restaurantId, normalizedInput, {
         incrementReservationCount: true
       });
@@ -327,19 +337,22 @@ export class ReservationsService {
           branchId: input.branchId,
           roomId: input.roomId,
           customerId: customer.id,
-          code: createReservationCode(),
+          code: reservationCode,
+          codeNormalized: this.normalizeReservationCode(reservationCode),
           fullName: input.fullName,
           phone: input.phone,
           email: normalizedInput.email ?? null,
           partySize: input.partySize,
           status: "confirmed",
           turn,
+          specialServiceId: specialService?.id || null,
           serviceDate,
           serviceTime,
           preferredZone: input.preferredZone,
           notes: input.notes,
           source: options?.source || "admin",
           durationMinutes,
+          turnoverMinutes,
           metadata: {
             seatingPreference: {
               requestedFeatures: preferredFeatures,
@@ -376,6 +389,7 @@ export class ReservationsService {
               roomId: input.roomId,
               branchId: input.branchId,
               reservationId: created.id
+              , specialServiceId: specialService?.id || null
             },
             create: {
               restaurantId,
@@ -385,6 +399,7 @@ export class ReservationsService {
               reservationId: created.id,
               serviceDate,
               turn,
+              specialServiceId: specialService?.id || null,
               status: "reserved"
             }
           })
@@ -415,6 +430,39 @@ export class ReservationsService {
     return reservation;
   }
 
+  private async resolveSpecialService(restaurantId: string, branchId: string, serviceDate: Date, serviceTime: string, client: PrismaService | Prisma.TransactionClient = this.prisma) {
+    const services = await client.specialService.findMany({ where: { restaurantId, branchId, serviceDate }, orderBy: { position: "asc" } });
+    if (!services.length) return null;
+    const start = this.timeToMinutes(serviceTime);
+    const service = services.find((item) => {
+      const windowStart = this.timeToMinutes(item.startTime);
+      const windowEnd = this.timeToMinutes(item.endTime);
+      return start >= windowStart && start + item.durationMinutes + item.turnoverMinutes <= windowEnd && (start - windowStart) % item.intervalMin === 0;
+    });
+    if (!service) throw new ConflictException("El horario no pertenece a una franja especial disponible o invade el tiempo de recambio.");
+    return service;
+  }
+
+  private normalizeReservationCode(code: string) {
+    return normalizeReservationCode(code);
+  }
+
+  private async createAvailableReservationCode(client: PrismaService | Prisma.TransactionClient) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const code = createReservationCode();
+      const normalizedCode = this.normalizeReservationCode(code);
+      // Serialize only contenders for this candidate code. This closes the
+      // check/create race while keeping normal reservation creation concurrent.
+      await client.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${normalizedCode}))`);
+      const exists = await client.reservation.findUnique({
+        where: { codeNormalized: normalizedCode },
+        select: { id: true }
+      });
+      if (!exists) return code;
+    }
+    throw new ConflictException("No se pudo generar un código de reserva único. Intentá nuevamente.");
+  }
+
   async listManualTableOptions(user: RequestUser, input: {
     branchId: string;
     roomId: string;
@@ -427,13 +475,14 @@ export class ReservationsService {
     const serviceDate = new Date(input.serviceDate);
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
     const turn = this.deriveTurnFromServiceTime(input.serviceTime);
-    await this.validateBookingException(restaurantId, input.branchId, serviceDate, input.serviceTime);
+    const specialService = await this.resolveSpecialService(restaurantId, input.branchId, serviceDate, input.serviceTime);
+    if (!specialService) await this.validateBookingException(restaurantId, input.branchId, serviceDate, input.serviceTime);
     await this.assertRoomIsBookable(restaurantId, input.roomId, serviceDate, turn);
     const room = await this.prisma.room.findFirst({ where: { id: input.roomId, restaurantId, branchId: input.branchId, isActive: true } });
     if (!room) throw new NotFoundException("Room not found");
     const options = await this.listAvailableAssignments(this.prisma, {
       restaurantId, roomId: input.roomId, serviceDate, turn, partySize: input.partySize,
-      preferredZone: input.preferredZone, serviceTime: input.serviceTime, durationMinutes: 180
+      preferredZone: input.preferredZone, serviceTime: input.serviceTime, durationMinutes: specialService?.durationMinutes || 180, turnoverMinutes: specialService?.turnoverMinutes || 0
     });
     return options.map((option) => ({ ...option, combination: option.tableIds.length > 1 }));
   }
@@ -450,13 +499,14 @@ export class ReservationsService {
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
     const serviceTime = this.normalizeServiceTime(input.serviceTime);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
-    await this.validateBookingException(restaurantId, input.branchId, serviceDate, serviceTime);
+    const specialService = await this.resolveSpecialService(restaurantId, input.branchId, serviceDate, serviceTime);
+    if (!specialService) await this.validateBookingException(restaurantId, input.branchId, serviceDate, serviceTime);
     await this.assertRoomIsBookable(restaurantId, input.roomId, serviceDate, turn);
     const room = await this.prisma.room.findFirst({ where: { id: input.roomId, restaurantId, branchId: input.branchId, isActive: true } });
     if (!room) throw new NotFoundException("Room not found");
     const tables = await this.listAvailableTables(this.prisma, {
       restaurantId, roomId: input.roomId, serviceDate, turn, partySize: 1,
-      preferredZone: input.preferredZone, serviceTime, durationMinutes: 180, requireFreeState: true
+      preferredZone: input.preferredZone, serviceTime, durationMinutes: specialService?.durationMinutes || 180, turnoverMinutes: specialService?.turnoverMinutes || 0, requireFreeState: true
     });
     return tables
       .sort((left, right) => left.label.localeCompare(right.label, "es", { numeric: true }))
@@ -467,7 +517,7 @@ export class ReservationsService {
     client: PrismaService | Prisma.TransactionClient,
     input: {
       restaurantId: string; roomId: string; serviceDate: Date; turn: "mediodia" | "noche"; partySize: number;
-      preferredZone?: string; preferredFeatures?: PreferredFeature[]; serviceTime?: string; durationMinutes?: number;
+      preferredZone?: string; preferredFeatures?: PreferredFeature[]; serviceTime?: string; durationMinutes?: number; turnoverMinutes?: number;
     },
     tableIds: string[]
   ) {
@@ -481,7 +531,7 @@ export class ReservationsService {
     client: PrismaService | Prisma.TransactionClient,
     input: {
       restaurantId: string; roomId: string; serviceDate: Date; turn: "mediodia" | "noche"; partySize: number;
-      preferredZone?: string; preferredFeatures?: PreferredFeature[]; serviceTime?: string; durationMinutes?: number;
+      preferredZone?: string; preferredFeatures?: PreferredFeature[]; serviceTime?: string; durationMinutes?: number; turnoverMinutes?: number;
     },
     tableIds: string[]
   ) {
@@ -513,11 +563,13 @@ export class ReservationsService {
     serviceTime: string;
     preferredFeatures?: PreferredFeature[];
     durationMinutes?: number;
+    turnoverMinutes?: number;
   }) {
     const serviceDate = new Date(input.serviceDate);
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
     const serviceTime = this.normalizeServiceTime(input.serviceTime);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
+    const specialService = await this.resolveSpecialService(input.restaurantId, input.branchId, serviceDate, serviceTime);
     const [pointBlocks, recurringBlocks] = await Promise.all([
       this.prisma.roomBookingBlock.findMany({ where: { restaurantId: input.restaurantId, branchId: input.branchId, serviceDate, turn }, select: { roomId: true } }),
       this.prisma.roomBookingRule.findMany({
@@ -538,7 +590,7 @@ export class ReservationsService {
         turn,
         partySize: input.partySize,
         preferredFeatures: input.preferredFeatures || []
-        , serviceTime, durationMinutes: input.durationMinutes || 180
+        , serviceTime, durationMinutes: specialService?.durationMinutes || input.durationMinutes || 180, turnoverMinutes: specialService?.turnoverMinutes || input.turnoverMinutes || 0
       });
       if (assignment) return { roomId: room.id, serviceTime, turn };
     }
@@ -588,6 +640,71 @@ export class ReservationsService {
     return { id: reservation.id, code: reservation.code, deleted: true };
   }
 
+  async cancelManual(user: RequestUser, reservationId: string, input: { reason?: string }) {
+    const restaurantId = this.restaurantScope(user);
+    const allowedRoles = new Set(["restaurant_owner", "restaurant_manager"]);
+    if (!allowedRoles.has(String(user.role))) {
+      throw new ForbiddenException("Solo el dueño o gerente puede cancelar reservas");
+    }
+
+    const cancelled = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.reservation.findFirst({ where: { id: reservationId, restaurantId }, select: { status: true } });
+      if (!current) throw new NotFoundException("Reservation not found");
+      if (!( ["pending", "confirmed", "seated"] as ReservationStatus[]).includes(current.status)) {
+        throw new ConflictException("La reserva ya no está activa y no puede cancelarse.");
+      }
+      const changedCount = await tx.reservation.updateMany({
+        where: {
+          id: reservationId,
+          restaurantId,
+          status: { in: ["pending", "confirmed", "seated"] }
+        },
+        data: { status: "cancelled" }
+      });
+      if (changedCount.count !== 1) {
+        throw new ConflictException("La reserva ya no está activa y no puede cancelarse.");
+      }
+
+      const reservation = await tx.reservation.findUnique({
+        where: { id: reservationId },
+        include: {
+          room: true,
+          branch: true,
+          customer: { include: { tags: true } },
+          tables: { include: { table: true } },
+          deposit: { select: { id: true, requiredAmount: true, paidAmount: true, currency: true, status: true } }
+        }
+      });
+      if (!reservation) throw new NotFoundException("Reservation not found");
+
+      await tx.serviceState.updateMany({
+        where: { restaurantId, reservationId: reservation.id },
+        data: { status: "free", reservationId: null }
+      });
+      return { reservation, previousStatus: current.status };
+    });
+
+    this.realtimeService.publish("reservation.cancelled", {
+      restaurantId,
+      branchId: cancelled.reservation.branchId,
+      roomId: cancelled.reservation.roomId,
+      reservationId: cancelled.reservation.id
+    });
+    await this.auditService.log({
+      action: "reservation.cancelled",
+      targetType: "reservation",
+      targetId: cancelled.reservation.id,
+      restaurantId,
+      restaurantUserId: user.sub,
+      metadata: {
+        code: cancelled.reservation.code,
+        previousStatus: cancelled.previousStatus,
+        reason: input.reason?.trim() || null
+      }
+    });
+    return cancelled.reservation;
+  }
+
   async listTableOptions(user: RequestUser, reservationId: string) {
     const restaurantId = this.restaurantScope(user);
     const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
@@ -601,6 +718,7 @@ export class ReservationsService {
       partySize: reservation.partySize,
       serviceTime: reservation.serviceTime,
       durationMinutes: reservation.durationMinutes,
+      turnoverMinutes: reservation.turnoverMinutes,
       excludeReservationId: reservation.id
     });
   }
@@ -623,6 +741,7 @@ export class ReservationsService {
         partySize: current.partySize,
         serviceTime: current.serviceTime,
         durationMinutes: current.durationMinutes,
+        turnoverMinutes: current.turnoverMinutes,
         excludeReservationId: current.id
       });
       const assignment = availableAssignments.find((option) => option.tableIds.join("|") === normalizedTableIds.join("|"));
@@ -651,7 +770,7 @@ export class ReservationsService {
         assignment.tableIds.map((tableId) =>
           tx.serviceState.upsert({
             where: { tableId_reservationId: { tableId, reservationId: current.id } },
-            update: { status: "reserved", branchId: current.branchId, roomId: current.roomId, reservationId: current.id },
+            update: { status: "reserved", branchId: current.branchId, roomId: current.roomId, reservationId: current.id, specialServiceId: current.specialServiceId },
             create: {
               restaurantId,
               branchId: current.branchId,
@@ -660,6 +779,7 @@ export class ReservationsService {
               reservationId: current.id,
               serviceDate: current.serviceDate,
               turn: current.turn,
+              specialServiceId: current.specialServiceId,
               status: "reserved"
             }
           })
@@ -691,7 +811,7 @@ export class ReservationsService {
       where: {
         restaurantId,
         ...(input.reservationId ? { id: input.reservationId } : {}),
-        ...(input.code ? { code: input.code } : {})
+        ...(input.code ? { codeNormalized: this.normalizeReservationCode(input.code) } : {})
       },
       include: { tables: true }
     });
@@ -731,7 +851,8 @@ export class ReservationsService {
             },
             update: {
               status: tableStatus,
-              reservationId: next === "completed" ? null : reservation.id
+              reservationId: next === "completed" ? null : reservation.id,
+              specialServiceId: reservation.specialServiceId
             },
             create: {
               restaurantId,
@@ -741,6 +862,7 @@ export class ReservationsService {
               reservationId: next === "completed" ? null : reservation.id,
               serviceDate: reservation.serviceDate,
               turn: reservation.turn,
+              specialServiceId: reservation.specialServiceId,
               status: tableStatus
             }
           })
@@ -801,9 +923,11 @@ export class ReservationsService {
     if (Number.isNaN(serviceDate.getTime())) {
       throw new BadRequestException("Invalid service date");
     }
+    if (!input.serviceTime && await this.prisma.specialService.count({ where: { restaurantId: input.restaurantId, branchId: input.branchId, serviceDate } })) throw new BadRequestException("Las fechas con servicios especiales requieren un horario exacto.");
     const serviceTime = this.normalizeServiceTime(input.serviceTime, input.turn);
     const turn = this.deriveTurnFromServiceTime(serviceTime);
-    await this.validateBookingException(input.restaurantId, input.branchId, serviceDate, serviceTime);
+    const specialService = await this.resolveSpecialService(input.restaurantId, input.branchId, serviceDate, serviceTime);
+    if (!specialService) await this.validateBookingException(input.restaurantId, input.branchId, serviceDate, serviceTime);
     if (await this.isRoomBlocked(input.restaurantId, input.roomId, serviceDate, turn)) {
       return {
         available: false, status: "unavailable", branchId: input.branchId, roomId: input.roomId, turn,
@@ -821,7 +945,10 @@ export class ReservationsService {
       turn,
       partySize: input.partySize,
       preferredZone: input.preferredZone,
-      preferredFeatures
+      preferredFeatures,
+      serviceTime,
+      durationMinutes: specialService?.durationMinutes || 180,
+      turnoverMinutes: specialService?.turnoverMinutes || 0
     });
     const generalAssignment = preferredAssignment || !preferredFeatures.length
       ? null
@@ -831,7 +958,10 @@ export class ReservationsService {
           serviceDate,
           turn,
           partySize: input.partySize,
-          preferredZone: input.preferredZone
+          preferredZone: input.preferredZone,
+          serviceTime,
+          durationMinutes: specialService?.durationMinutes || 180,
+          turnoverMinutes: specialService?.turnoverMinutes || 0
         });
     const status = preferredAssignment
       ? "preferred_available"
@@ -919,7 +1049,7 @@ export class ReservationsService {
     return this.prisma.reservation.findFirst({
       where: {
         restaurantId,
-        ...(input.code ? { code: input.code } : {}),
+        ...(input.code ? { codeNormalized: this.normalizeReservationCode(input.code) } : {}),
         ...(normalizedPhone ? { phone: normalizedPhone } : {}),
         ...(serviceDate ? { serviceDate } : {})
       },
@@ -956,7 +1086,7 @@ export class ReservationsService {
     const reservation = await this.prisma.reservation.findFirst({
       where: {
         restaurantId,
-        code: input.code
+        codeNormalized: this.normalizeReservationCode(input.code)
       },
       include: {
         customer: true,
@@ -982,7 +1112,10 @@ export class ReservationsService {
     if (Number.isNaN(nextServiceDate.getTime())) {
       throw new BadRequestException("Invalid service date");
     }
-    await this.validateBookingException(restaurantId, nextBranchId, nextServiceDate, nextServiceTime);
+    const specialService = await this.resolveSpecialService(restaurantId, nextBranchId, nextServiceDate, nextServiceTime);
+    if (!specialService) await this.validateBookingException(restaurantId, nextBranchId, nextServiceDate, nextServiceTime);
+    const nextDurationMinutes = specialService?.durationMinutes || reservation.durationMinutes;
+    const nextTurnoverMinutes = specialService?.turnoverMinutes ?? reservation.turnoverMinutes;
     await this.assertRoomIsBookable(restaurantId, nextRoomId, nextServiceDate, nextTurn);
 
     const room = await this.prisma.room.findFirst({
@@ -1004,6 +1137,9 @@ export class ReservationsService {
       turn: nextTurn,
       partySize: nextPartySize,
       preferredZone: input.preferredZone === null ? undefined : input.preferredZone || reservation.preferredZone || undefined,
+      serviceTime: nextServiceTime,
+      durationMinutes: nextDurationMinutes,
+      turnoverMinutes: nextTurnoverMinutes,
       excludeReservationId: reservation.id
     });
 
@@ -1068,6 +1204,9 @@ export class ReservationsService {
           serviceDate: nextServiceDate,
           serviceTime: nextServiceTime,
           turn: nextTurn,
+          specialServiceId: specialService?.id || null,
+          durationMinutes: nextDurationMinutes,
+          turnoverMinutes: nextTurnoverMinutes,
           preferredZone: input.preferredZone === null ? null : input.preferredZone ?? reservation.preferredZone,
           notes: input.notes === null ? null : input.notes ?? reservation.notes,
           tables: {
@@ -1097,7 +1236,8 @@ export class ReservationsService {
               status: "reserved",
               roomId: nextRoomId,
               branchId: nextBranchId,
-              reservationId: reservation.id
+              reservationId: reservation.id,
+              specialServiceId: specialService?.id || null
             },
             create: {
               restaurantId,
@@ -1107,6 +1247,7 @@ export class ReservationsService {
               reservationId: reservation.id,
               serviceDate: nextServiceDate,
               turn: nextTurn,
+              specialServiceId: specialService?.id || null,
               status: "reserved"
             }
           })
@@ -1172,6 +1313,7 @@ export class ReservationsService {
       excludeReservationId?: string;
       serviceTime?: string;
       durationMinutes?: number;
+      turnoverMinutes?: number;
       requireFreeState?: boolean;
     }
   ) {
@@ -1185,7 +1327,7 @@ export class ReservationsService {
     });
 
     const requestedStart = this.timeToMinutes(input.serviceTime || "20:00");
-    const requestedEnd = requestedStart + (input.durationMinutes || 180);
+    const requestedEnd = requestedStart + (input.durationMinutes || 180) + (input.turnoverMinutes || 0);
     const reservations = await client.reservation.findMany({
       where: {
         restaurantId: input.restaurantId,
@@ -1194,11 +1336,11 @@ export class ReservationsService {
         status: { notIn: ["cancelled", "completed", "no_show"] },
         ...(input.excludeReservationId ? { NOT: { id: input.excludeReservationId } } : {})
       },
-      select: { serviceTime: true, durationMinutes: true, tables: { select: { tableId: true } } }
+      select: { serviceTime: true, durationMinutes: true, turnoverMinutes: true, tables: { select: { tableId: true } } }
     });
     const takenIds = new Set(reservations.flatMap((reservation) => {
       const start = this.timeToMinutes(reservation.serviceTime);
-      const overlaps = requestedStart < start + reservation.durationMinutes && start < requestedEnd;
+      const overlaps = requestedStart < start + reservation.durationMinutes + reservation.turnoverMinutes && start < requestedEnd;
       return overlaps ? reservation.tables.map((item) => item.tableId) : [];
     }));
     const blockedIds = await client.serviceState.findMany({
@@ -1207,7 +1349,7 @@ export class ReservationsService {
         roomId: input.roomId,
         serviceDate: input.serviceDate,
         turn: input.turn,
-        status: input.requireFreeState ? { in: ["blocked", "occupied", "reserved"] } : "blocked"
+        status: { in: ["blocked", "occupied"] }
       },
       select: { tableId: true }
     });
@@ -1234,6 +1376,7 @@ export class ReservationsService {
       excludeReservationId?: string;
       serviceTime?: string;
       durationMinutes?: number;
+      turnoverMinutes?: number;
     }
   ): Promise<Array<{ tableIds: string[]; tableLabels: string[]; seats: number; features: ReturnType<typeof getSharedTableFeatures> }>> {
     const availableTables = await this.listAvailableTables(client, input);
@@ -1294,6 +1437,7 @@ export class ReservationsService {
       excludeReservationId?: string;
       serviceTime?: string;
       durationMinutes?: number;
+      turnoverMinutes?: number;
     }
   ) {
     const assignments = await this.listAvailableAssignments(client, input);

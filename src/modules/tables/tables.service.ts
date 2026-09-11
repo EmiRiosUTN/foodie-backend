@@ -18,14 +18,15 @@ export class TablesService {
     return user.restaurantId;
   }
 
-  async listStates(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche" }) {
+  async listStates(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche"; specialServiceId?: string }) {
     const restaurantId = this.restaurantScope(user);
     const states = await this.prisma.serviceState.findMany({
       where: {
         restaurantId,
         branchId: input.branchId,
         serviceDate: new Date(input.serviceDate),
-        turn: input.turn
+        turn: input.turn,
+        ...(input.specialServiceId ? { specialServiceId: input.specialServiceId } : {})
       }
     });
     const priority = { free: 0, reserved: 1, occupied: 2, blocked: 3 };
@@ -45,6 +46,7 @@ export class TablesService {
       reservationId?: string | null;
       serviceDate: string;
       turn: "mediodia" | "noche";
+      specialServiceId?: string | null;
       status: "free" | "reserved" | "occupied" | "blocked";
     }
   ) {
@@ -73,6 +75,7 @@ export class TablesService {
         reservationId: input.reservationId || `manual:${input.serviceDate}:${input.turn}`,
         roomId: input.roomId,
         branchId: input.branchId
+        , specialServiceId: input.specialServiceId || null
       },
       create: {
         restaurantId,
@@ -82,6 +85,7 @@ export class TablesService {
         reservationId: input.reservationId || `manual:${input.serviceDate}:${input.turn}`,
         serviceDate: new Date(input.serviceDate),
         turn: input.turn,
+        specialServiceId: input.specialServiceId || null,
         status: input.status
       }
     });

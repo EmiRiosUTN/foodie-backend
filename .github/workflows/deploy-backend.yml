@@ -1,0 +1,44 @@
+name: Deploy Foodie backend
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: foodie-backend-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - run: npm run prisma:generate
+      - run: npm run build
+
+  deploy:
+    name: Deploy production
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy through the restricted server account
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.FOODIE_DEPLOY_HOST }}
+          username: ${{ secrets.FOODIE_DEPLOY_USER }}
+          key: ${{ secrets.FOODIE_DEPLOY_SSH_KEY }}
+          port: ${{ secrets.FOODIE_DEPLOY_PORT }}
+          script_stop: true
+          command_timeout: 15m
+          script: |
+            cd "${{ secrets.FOODIE_BACKEND_PATH }}"
+            bash scripts/deploy-production.sh

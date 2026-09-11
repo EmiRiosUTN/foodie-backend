@@ -5,7 +5,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { ReservationsService } from "../reservations/reservations.service";
 import { verifyPassword } from "../../common/security/password";
 import { RealtimeService } from "../realtime/realtime.service";
-import { createRequestHash } from "../../common/utils/code";
+import { createRequestHash, normalizeReservationCode } from "../../common/utils/code";
 import { AuditService } from "../audit/audit.service";
 import { hashOpaqueToken } from "../../common/security/token-hash";
 import type { PreferredFeature } from "../reservations/preferred-features";
@@ -531,7 +531,7 @@ export class IntegrationsService {
     });
 
     const reservation = await this.prisma.reservation.findFirst({
-      where: { restaurantId: token.restaurantId, code: input.code }
+      where: { restaurantId: token.restaurantId, codeNormalized: normalizeReservationCode(input.code) }
     });
     if (!reservation) {
       throw new ForbiddenException("Reservation not found for this token");

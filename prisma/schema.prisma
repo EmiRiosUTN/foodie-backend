@@ -196,6 +196,7 @@ model Restaurant {
   bookingWindows    BookingWindow[]
   bookingCutoffs    BookingCutoffRule[]
   bookingExceptions BookingException[]
+  specialServices   SpecialService[]
 }
 
 model RestaurantCustomization {
@@ -328,6 +329,7 @@ model Branch {
   onlineBookingExceptions OnlineBookingException[]
   bookingWindows BookingWindow[]
   bookingExceptions BookingException[]
+  specialServices   SpecialService[]
   roomBookingBlocks RoomBookingBlock[]
   roomBookingRules  RoomBookingRule[]
   openingHours BranchOpeningHour[]
@@ -594,18 +596,21 @@ model Reservation {
   roomId         String
   customerId     String?
   code           String              @unique
+  codeNormalized String              @unique
   fullName       String
   phone          String
   email          String?
   partySize      Int
   status         ReservationStatus   @default(pending)
   turn           Turn
+  specialServiceId String?
   serviceDate    DateTime
   serviceTime    String              @default("20:00")
   preferredZone  String?
   notes          String?
   source         ReservationSource   @default(admin)
   durationMinutes Int                @default(180)
+  turnoverMinutes Int                @default(0)
   metadata       Json?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
@@ -613,11 +618,36 @@ model Reservation {
   branch         Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
   room           Room                @relation(fields: [roomId], references: [id], onDelete: Cascade)
   customer       Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  specialService SpecialService?     @relation(fields: [specialServiceId], references: [id], onDelete: Restrict)
   tables         ReservationTable[]
   deposit        ReservationDeposit?
 
   @@index([restaurantId, branchId, serviceDate, turn])
   @@index([roomId, serviceDate, turn])
+  @@index([specialServiceId])
+}
+
+model SpecialService {
+  id              String   @id @default(cuid())
+  restaurantId    String
+  branchId        String
+  serviceDate     DateTime
+  label           String
+  startTime       String
+  endTime         String
+  intervalMin     Int      @default(15)
+  durationMinutes Int      @default(120)
+  turnoverMinutes Int      @default(0)
+  position        Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branch          Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  reservations    Reservation[]
+
+  @@unique([branchId, serviceDate, position])
+  @@unique([branchId, serviceDate, label])
+  @@index([restaurantId, branchId, serviceDate])
 }
 
 model RoomBookingBlock {
@@ -758,6 +788,7 @@ model ServiceState {
   reservationId String?
   serviceDate   DateTime
   turn          Turn
+  specialServiceId String?
   status        TableStateStatus
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt

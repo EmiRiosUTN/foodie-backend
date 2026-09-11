@@ -6,7 +6,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import type { PreferredFeature } from "../reservations/preferred-features";
 import { ReservationsService } from "../reservations/reservations.service";
 
-type Schedule = { isEnabled: boolean; startTime: string; endTime: string; intervalMin: number; service?: "lunch" | "dinner" };
+type Schedule = { isEnabled: boolean; startTime: string; endTime: string; intervalMin: number; service?: "lunch" | "dinner"; durationMinutes?: number; turnoverMinutes?: number; label?: string; specialServiceId?: string };
 const requests = new Map<string, number[]>();
 
 function serviceDate(date: string) { return new Date(`${date}T00:00:00.000Z`); }
@@ -25,6 +25,42 @@ export class OnlineBookingsService {
     if (user.scope !== "restaurant" || !user.restaurantId || user.role !== "restaurant_owner") throw new ForbiddenException("Only the restaurant owner can manage online bookings");
     return user.restaurantId;
   }
+  private restaurantScope(user: RequestUser) {
+    if (user.scope !== "restaurant" || !user.restaurantId) throw new ForbiddenException("Restaurant context required");
+    return user.restaurantId;
+  }
+  async listSpecialServices(user: RequestUser, input: { branchId: string; serviceDate: string }) {
+    const restaurantId = this.restaurantScope(user);
+    const date = serviceDate(input.serviceDate);
+    return this.prisma.specialService.findMany({ where: { restaurantId, branchId: input.branchId, serviceDate: date }, orderBy: { position: "asc" } });
+  }
+  async saveSpecialServices(user: RequestUser, input: { branchId: string; serviceDate: string; services: Array<{ id?: string; label: string; startTime: string; endTime: string; intervalMin: number; durationMinutes: number; turnoverMinutes: number }> }) {
+    const restaurantId = this.assertOwner(user);
+    const date = serviceDate(input.serviceDate);
+    const branch = await this.prisma.branch.findFirst({ where: { id: input.branchId, restaurantId }, select: { id: true } });
+    if (!branch) throw new ForbiddenException("Invalid branch");
+    const labels = new Set(input.services.map((item) => item.label.trim().toLocaleLowerCase()));
+    if (labels.size !== input.services.length || input.services.some((item) => !item.label.trim() || timeToMinutes(item.endTime) <= timeToMinutes(item.startTime) || item.durationMinutes + item.turnoverMinutes > timeToMinutes(item.endTime) - timeToMinutes(item.startTime))) throw new BadRequestException("Invalid special service");
+    const ordered = [...input.services].sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+    if (ordered.some((item, index) => index > 0 && timeToMinutes(item.startTime) < timeToMinutes(ordered[index - 1].endTime))) throw new BadRequestException("Special services cannot overlap");
+    const existing = await this.prisma.specialService.findMany({ where: { restaurantId, branchId: input.branchId, serviceDate: date }, include: { reservations: { select: { id: true } } } });
+    const incomingIds = new Set(input.services.flatMap((item) => item.id ? [item.id] : []));
+    for (const current of existing) {
+      const next = input.services.find((item) => item.id === current.id);
+      if (current.reservations.length && (!next || current.startTime !== next.startTime || current.endTime !== next.endTime || current.intervalMin !== next.intervalMin || current.durationMinutes !== next.durationMinutes || current.turnoverMinutes !== next.turnoverMinutes)) throw new ConflictException("No se puede modificar o eliminar una franja con reservas asociadas.");
+      if (current.reservations.length && !incomingIds.has(current.id)) throw new ConflictException("No se puede eliminar una franja con reservas asociadas.");
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.specialService.deleteMany({ where: { restaurantId, branchId: input.branchId, serviceDate: date, id: { notIn: [...incomingIds] } } });
+      for (const [position, item] of input.services.entries()) {
+        const data = { label: item.label.trim(), startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin, durationMinutes: item.durationMinutes, turnoverMinutes: item.turnoverMinutes, position };
+        if (item.id) await tx.specialService.update({ where: { id: item.id }, data });
+        else await tx.specialService.create({ data: { restaurantId, branchId: input.branchId, serviceDate: date, ...data } });
+      }
+    });
+    await this.audit.log({ action: "special_services.updated", targetType: "branch", targetId: input.branchId, restaurantId, restaurantUserId: user.sub, metadata: { serviceDate: input.serviceDate, count: input.services.length } });
+    return this.listSpecialServices(user, input);
+  }
   private limit(key: string) {
     const now = Date.now(); const active = (requests.get(key) || []).filter((at) => at > now - 60_000);
     if (active.length >= 30) throw new HttpException("Too many requests. Please try again shortly.", HttpStatus.TOO_MANY_REQUESTS);
@@ -37,6 +73,8 @@ export class OnlineBookingsService {
     return restaurant;
   }
   private async schedulesFor(restaurantId: string, branchId: string, date: string, timezone: string): Promise<Schedule[]> {
+    const specialServices = await this.prisma.specialService.findMany({ where: { restaurantId, branchId, serviceDate: serviceDate(date) }, orderBy: { position: "asc" } });
+    if (specialServices.length) return specialServices.map((item) => ({ isEnabled: true, startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin, durationMinutes: item.durationMinutes, turnoverMinutes: item.turnoverMinutes, label: item.label, specialServiceId: item.id }));
     const exception = await this.prisma.bookingException.findFirst({ where: { restaurantId, branchId, serviceDate: serviceDate(date) } });
     if (exception) {
       if (exception.type !== "custom_hours") return [];
@@ -139,10 +177,10 @@ export class OnlineBookingsService {
     const schedules = await this.schedulesFor(restaurant.id, branch.id, input.date, branch.timezone);
     if (!schedules.length) return { date: input.date, partySize: input.partySize, slots: [] };
     const slots: Array<{ time: string; available: boolean }> = [];
-    for (const schedule of schedules) for (let minute = timeToMinutes(schedule.startTime); minute < timeToMinutes(schedule.endTime); minute += schedule.intervalMin) {
+    for (const schedule of schedules) for (let minute = timeToMinutes(schedule.startTime); minute + (schedule.durationMinutes || branch.onlineBookingDurationMinutes) + (schedule.turnoverMinutes || 0) <= timeToMinutes(schedule.endTime); minute += schedule.intervalMin) {
       const time = minutesToTime(minute);
       if (!this.meetsAdvance(input.date, time, await this.minimumAdvance(restaurant.id, input.date, time, branch.timezone, settings.minAdvanceMinutes), branch.timezone)) continue;
-      const available = await this.reservations.findAvailableRoomForRestaurant({ restaurantId: restaurant.id, branchId: branch.id, partySize: input.partySize, serviceDate: input.date, serviceTime: time, preferredFeatures: input.preferredFeatures, durationMinutes: branch.onlineBookingDurationMinutes });
+      const available = await this.reservations.findAvailableRoomForRestaurant({ restaurantId: restaurant.id, branchId: branch.id, partySize: input.partySize, serviceDate: input.date, serviceTime: time, preferredFeatures: input.preferredFeatures, durationMinutes: schedule.durationMinutes || branch.onlineBookingDurationMinutes, turnoverMinutes: schedule.turnoverMinutes || 0 });
       if (available) slots.push({ time, available: true });
     }
     return { date: input.date, partySize: input.partySize, slots };
@@ -167,7 +205,7 @@ export class OnlineBookingsService {
         this.validateWindow(date, settings, branch.timezone);
         const schedules = await this.schedulesFor(restaurant.id, branch.id, date, branch.timezone);
         if (schedules.some((schedule) => {
-          for (let minute = timeToMinutes(schedule.startTime); minute < timeToMinutes(schedule.endTime); minute += schedule.intervalMin) {
+          for (let minute = timeToMinutes(schedule.startTime); minute + (schedule.durationMinutes || branch.onlineBookingDurationMinutes) + (schedule.turnoverMinutes || 0) <= timeToMinutes(schedule.endTime); minute += schedule.intervalMin) {
             if (this.meetsAdvance(date, minutesToTime(minute), settings.minAdvanceMinutes, branch.timezone)) return true;
           }
           return false;
@@ -185,13 +223,13 @@ export class OnlineBookingsService {
     if (input.partySize < settings.minPartySize || input.partySize > settings.maxPartySize) throw new BadRequestException("Party size is outside the allowed range");
     this.validateWindow(input.date, settings, branch.timezone);
     const schedules = await this.schedulesFor(restaurant.id, branch.id, input.date, branch.timezone);
-    const schedule = schedules.find((item) => timeToMinutes(input.time) >= timeToMinutes(item.startTime) && timeToMinutes(input.time) < timeToMinutes(item.endTime) && (timeToMinutes(input.time) - timeToMinutes(item.startTime)) % item.intervalMin === 0);
+    const schedule = schedules.find((item) => timeToMinutes(input.time) >= timeToMinutes(item.startTime) && timeToMinutes(input.time) + (item.durationMinutes || branch.onlineBookingDurationMinutes) + (item.turnoverMinutes || 0) <= timeToMinutes(item.endTime) && (timeToMinutes(input.time) - timeToMinutes(item.startTime)) % item.intervalMin === 0);
     if (!schedule) throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });
     if (!this.meetsAdvance(input.date, input.time, await this.minimumAdvance(restaurant.id, input.date, input.time, branch.timezone, settings.minAdvanceMinutes), branch.timezone)) throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });
-    const available = await this.reservations.findAvailableRoomForRestaurant({ restaurantId: restaurant.id, branchId: branch.id, partySize: input.partySize, serviceDate: input.date, serviceTime: input.time, preferredFeatures: input.preferredFeatures, durationMinutes: branch.onlineBookingDurationMinutes });
+    const available = await this.reservations.findAvailableRoomForRestaurant({ restaurantId: restaurant.id, branchId: branch.id, partySize: input.partySize, serviceDate: input.date, serviceTime: input.time, preferredFeatures: input.preferredFeatures, durationMinutes: schedule.durationMinutes || branch.onlineBookingDurationMinutes, turnoverMinutes: schedule.turnoverMinutes || 0 });
     if (!available) throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });
     try {
-      const reservation = await this.reservations.createReservationForRestaurant(restaurant.id, { branchId: branch.id, roomId: available.roomId, fullName: input.fullName, phone: input.phone, partySize: input.partySize, serviceDate: input.date, serviceTime: input.time, preferredFeatures: input.preferredFeatures, notes: input.notes, durationMinutes: branch.onlineBookingDurationMinutes }, { source: "public_web" });
+      const reservation = await this.reservations.createReservationForRestaurant(restaurant.id, { branchId: branch.id, roomId: available.roomId, fullName: input.fullName, phone: input.phone, partySize: input.partySize, serviceDate: input.date, serviceTime: input.time, preferredFeatures: input.preferredFeatures, notes: input.notes, durationMinutes: schedule.durationMinutes || branch.onlineBookingDurationMinutes, turnoverMinutes: schedule.turnoverMinutes || 0 }, { source: "public_web" });
       return { code: reservation.code, date: input.date, time: reservation.serviceTime, partySize: reservation.partySize, branch: branch.name, restaurant: restaurant.name };
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });

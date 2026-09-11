@@ -5,6 +5,7 @@ import { AuditService } from "../audit/audit.service";
 import type { RequestUser } from "../../common/auth/request-user";
 import { PrismaService } from "../prisma/prisma.service";
 import { R2StorageService } from "./r2-storage.service";
+import { normalizeReservationCode } from "../../common/utils/code";
 
 const allowedMimeTypes = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -112,7 +113,7 @@ export class DepositsService {
   }
   async reminderEligibility(restaurantId: string, reservationCode: string) {
     if (!reservationCode?.trim()) return { eligible: false };
-    const reservation = await this.prisma.reservation.findFirst({ where: { code: reservationCode.trim(), restaurantId }, include: { deposit: true } });
+    const reservation = await this.prisma.reservation.findFirst({ where: { codeNormalized: normalizeReservationCode(reservationCode), restaurantId }, include: { deposit: true } });
     return { eligible: Boolean(reservation && reservation.status === "confirmed" && (!reservation.deposit || reservation.deposit.status === "complete")) };
   }
 }

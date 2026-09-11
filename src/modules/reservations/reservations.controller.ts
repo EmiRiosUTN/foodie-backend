@@ -47,6 +47,13 @@ const reassignTablesSchema = z.object({
   tableIds: z.array(z.string().min(1)).min(1)
 });
 
+const cancellationSchema = z.object({
+  reason: z.preprocess(
+    (value) => (typeof value === "string" && !value.trim() ? undefined : value),
+    z.string().max(500).optional()
+  )
+});
+
 @Controller()
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
@@ -56,9 +63,10 @@ export class ReservationsController {
     @CurrentUser() user: RequestUser,
     @Query("branchId") branchId: string,
     @Query("serviceDate") serviceDate: string,
-    @Query("turn") turn: "mediodia" | "noche"
+    @Query("turn") turn: "mediodia" | "noche",
+    @Query("specialServiceId") specialServiceId?: string
   ) {
-    return this.reservationsService.list(user, { branchId, serviceDate, turn });
+    return this.reservationsService.list(user, { branchId, serviceDate, turn, specialServiceId });
   }
 
   @Get("restaurant/reservations/history")
@@ -97,6 +105,12 @@ export class ReservationsController {
   @Post("restaurant/reservations/:reservationId/release")
   release(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string) {
     return this.reservationsService.moveToState(user, reservationId, "completed");
+  }
+
+  @Post("restaurant/reservations/:reservationId/cancel")
+  @Roles("restaurant_owner", "restaurant_manager")
+  cancel(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Body() body: unknown) {
+    return this.reservationsService.cancelManual(user, reservationId, cancellationSchema.parse(body || {}));
   }
 
   @Delete("restaurant/reservations/:reservationId")

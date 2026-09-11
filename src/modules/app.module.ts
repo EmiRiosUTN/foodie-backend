@@ -15,8 +15,10 @@ import { RestaurantConfigurationModule } from "./restaurant-configuration/restau
 import { GiftCardsModule } from "./gift-cards/gift-cards.module";
 import { ChatTagStylesModule } from "./chat-tag-styles/chat-tag-styles.module";
 import { DepositsModule } from "./deposits/deposits.module";
+import { HealthController } from "../health.controller";
 
 @Module({
+  controllers: [HealthController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,

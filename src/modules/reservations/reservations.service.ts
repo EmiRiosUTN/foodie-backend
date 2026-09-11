@@ -453,7 +453,7 @@ export class ReservationsService {
       const normalizedCode = this.normalizeReservationCode(code);
       // Serialize only contenders for this candidate code. This closes the
       // check/create race while keeping normal reservation creation concurrent.
-      await client.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${normalizedCode}))`);
+      await client.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${normalizedCode}))`);
       const exists = await client.reservation.findUnique({
         where: { codeNormalized: normalizedCode },
         select: { id: true }

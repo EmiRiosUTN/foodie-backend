@@ -34,26 +34,27 @@ export class OnlineBookingsService {
     const date = serviceDate(input.serviceDate);
     return this.prisma.specialService.findMany({ where: { restaurantId, branchId: input.branchId, serviceDate: date }, orderBy: { position: "asc" } });
   }
-  async saveSpecialServices(user: RequestUser, input: { branchId: string; serviceDate: string; services: Array<{ id?: string; label: string; startTime: string; endTime: string; intervalMin: number; durationMinutes: number; turnoverMinutes: number }> }) {
+  async saveSpecialServices(user: RequestUser, input: { branchId: string; serviceDate: string; services: Array<{ id?: string; label: string; startTime: string; endTime: string }> }) {
     const restaurantId = this.assertOwner(user);
     const date = serviceDate(input.serviceDate);
     const branch = await this.prisma.branch.findFirst({ where: { id: input.branchId, restaurantId }, select: { id: true } });
     if (!branch) throw new ForbiddenException("Invalid branch");
     const labels = new Set(input.services.map((item) => item.label.trim().toLocaleLowerCase()));
-    if (labels.size !== input.services.length || input.services.some((item) => !item.label.trim() || timeToMinutes(item.endTime) <= timeToMinutes(item.startTime) || item.durationMinutes + item.turnoverMinutes > timeToMinutes(item.endTime) - timeToMinutes(item.startTime))) throw new BadRequestException("Invalid special service");
+    if (labels.size !== input.services.length || input.services.some((item) => !item.label.trim() || timeToMinutes(item.endTime) <= timeToMinutes(item.startTime))) throw new BadRequestException("Invalid special service");
     const ordered = [...input.services].sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
     if (ordered.some((item, index) => index > 0 && timeToMinutes(item.startTime) < timeToMinutes(ordered[index - 1].endTime))) throw new BadRequestException("Special services cannot overlap");
     const existing = await this.prisma.specialService.findMany({ where: { restaurantId, branchId: input.branchId, serviceDate: date }, include: { reservations: { select: { id: true } } } });
     const incomingIds = new Set(input.services.flatMap((item) => item.id ? [item.id] : []));
     for (const current of existing) {
       const next = input.services.find((item) => item.id === current.id);
-      if (current.reservations.length && (!next || current.startTime !== next.startTime || current.endTime !== next.endTime || current.intervalMin !== next.intervalMin || current.durationMinutes !== next.durationMinutes || current.turnoverMinutes !== next.turnoverMinutes)) throw new ConflictException("No se puede modificar o eliminar una franja con reservas asociadas.");
+      if (current.reservations.length && (!next || current.startTime !== next.startTime || current.endTime !== next.endTime)) throw new ConflictException("No se puede modificar o eliminar una franja con reservas asociadas.");
       if (current.reservations.length && !incomingIds.has(current.id)) throw new ConflictException("No se puede eliminar una franja con reservas asociadas.");
     }
     await this.prisma.$transaction(async (tx) => {
       await tx.specialService.deleteMany({ where: { restaurantId, branchId: input.branchId, serviceDate: date, id: { notIn: [...incomingIds] } } });
       for (const [position, item] of input.services.entries()) {
-        const data = { label: item.label.trim(), startTime: item.startTime, endTime: item.endTime, intervalMin: item.intervalMin, durationMinutes: item.durationMinutes, turnoverMinutes: item.turnoverMinutes, position };
+        const serviceMinutes = timeToMinutes(item.endTime) - timeToMinutes(item.startTime);
+        const data = { label: item.label.trim(), startTime: item.startTime, endTime: item.endTime, intervalMin: serviceMinutes, durationMinutes: serviceMinutes, turnoverMinutes: 0, position };
         if (item.id) await tx.specialService.update({ where: { id: item.id }, data });
         else await tx.specialService.create({ data: { restaurantId, branchId: input.branchId, serviceDate: date, ...data } });
       }

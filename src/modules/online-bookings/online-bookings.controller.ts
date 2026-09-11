@@ -7,7 +7,7 @@ import { preferredFeaturesSchema } from "../reservations/preferred-features";
 import { OnlineBookingsService } from "./online-bookings.service";
 
 const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
-const specialServicesSchema = z.object({ branchId: z.string().min(1), serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), services: z.array(z.object({ id: z.string().min(1).optional(), label: z.string().trim().min(1).max(80), startTime: clock, endTime: clock, intervalMin: z.number().int().min(5).max(180), durationMinutes: z.number().int().min(15).max(720), turnoverMinutes: z.number().int().min(0).max(240) })).min(2).max(12) });
+const specialServicesSchema = z.object({ branchId: z.string().min(1), serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), services: z.array(z.object({ id: z.string().min(1).optional(), label: z.string().trim().min(1).max(80), startTime: clock, endTime: clock })).min(2).max(12) });
 const configSchema = z.object({
   isEnabled: z.boolean(), coverImageUrl: z.string().url().max(1000).nullable().optional(), whatsappPhone: z.string().trim().regex(/^\+?[0-9\s()\-]{7,30}$/).nullable().optional(),
   accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/), minAdvanceMinutes: z.number().int().min(0).max(10080),

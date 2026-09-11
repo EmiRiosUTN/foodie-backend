@@ -437,7 +437,7 @@ export class ReservationsService {
     const service = services.find((item) => {
       const windowStart = this.timeToMinutes(item.startTime);
       const windowEnd = this.timeToMinutes(item.endTime);
-      return start >= windowStart && start + item.durationMinutes + item.turnoverMinutes <= windowEnd && (start - windowStart) % item.intervalMin === 0;
+      return start === windowStart && start + item.durationMinutes + item.turnoverMinutes <= windowEnd;
     });
     if (!service) throw new ConflictException("El horario no pertenece a una franja especial disponible o invade el tiempo de recambio.");
     return service;

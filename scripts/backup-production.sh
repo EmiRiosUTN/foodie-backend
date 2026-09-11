@@ -6,12 +6,26 @@ readonly BACKUP_DIR="${BACKUP_DIR:-/var/backups/foodie/postgres}"
 readonly RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 readonly BACKUP_REASON="${BACKUP_REASON:-manual}"
 
+resolve_postgres_binary() {
+  local binary_name="$1"
+  local client_binary=""
+  client_binary="$(find /usr/lib/postgresql -mindepth 3 -maxdepth 3 -type f -name "$binary_name" 2>/dev/null | sort -V | tail -n 1 || true)"
+  if [[ -n "$client_binary" ]]; then
+    printf '%s\n' "$client_binary"
+    return
+  fi
+  command -v "$binary_name"
+}
+
+readonly PG_DUMP_BIN="$(resolve_postgres_binary pg_dump)"
+readonly PG_RESTORE_BIN="$(resolve_postgres_binary pg_restore)"
+
 if ! [[ "$RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]]; then
   echo "BACKUP_RETENTION_DAYS must be a positive integer." >&2
   exit 1
 fi
 
-for command_name in pg_dump pg_restore sha256sum; do
+for command_name in "$PG_DUMP_BIN" "$PG_RESTORE_BIN" sha256sum; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Backup aborted: $command_name is required." >&2
     exit 1
@@ -38,8 +52,8 @@ readonly METADATA_FILE="$BACKUP_DIR/${PREFIX}.metadata"
 cleanup() { rm -f "$TEMP_DUMP_FILE"; }
 trap cleanup EXIT
 
-pg_dump --format=custom --no-owner --no-privileges --file "$TEMP_DUMP_FILE" "$PG_DATABASE_URL"
-pg_restore --list "$TEMP_DUMP_FILE" >/dev/null
+"$PG_DUMP_BIN" --format=custom --no-owner --no-privileges --file "$TEMP_DUMP_FILE" "$PG_DATABASE_URL"
+"$PG_RESTORE_BIN" --list "$TEMP_DUMP_FILE" >/dev/null
 mv "$TEMP_DUMP_FILE" "$DUMP_FILE"
 sha256sum "$DUMP_FILE" > "${DUMP_FILE}.sha256"
 printf 'created_at=%s\ncommit=%s\nreason=%s\ndump=%s\n' \

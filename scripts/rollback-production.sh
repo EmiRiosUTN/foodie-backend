@@ -6,6 +6,19 @@ readonly PM2_APP="${PM2_APP_NAME:-foodie-backend}"
 readonly HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:4000/v1/health}"
 readonly HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-15}"
 
+resolve_postgres_binary() {
+  local binary_name="$1"
+  local client_binary=""
+  client_binary="$(find /usr/lib/postgresql -mindepth 3 -maxdepth 3 -type f -name "$binary_name" 2>/dev/null | sort -V | tail -n 1 || true)"
+  if [[ -n "$client_binary" ]]; then
+    printf '%s\n' "$client_binary"
+    return
+  fi
+  command -v "$binary_name"
+}
+
+readonly PG_RESTORE_BIN="$(resolve_postgres_binary pg_restore)"
+
 usage() {
   echo "Usage: bash scripts/rollback-production.sh <commit> [--restore-db <backup.dump> --confirm]" >&2
   exit 1
@@ -46,14 +59,14 @@ echo "Current database backup: $CURRENT_BACKUP"
 
 if [[ -n "$RESTORE_DUMP" ]]; then
   [[ -f "$RESTORE_DUMP" ]] || { echo "Backup file not found: $RESTORE_DUMP" >&2; exit 1; }
-  command -v pg_restore >/dev/null 2>&1 || { echo "pg_restore is required." >&2; exit 1; }
+  command -v "$PG_RESTORE_BIN" >/dev/null 2>&1 || { echo "pg_restore is required." >&2; exit 1; }
   if [[ -f "${RESTORE_DUMP}.sha256" ]]; then
     sha256sum --check "${RESTORE_DUMP}.sha256"
   fi
-  pg_restore --list "$RESTORE_DUMP" >/dev/null
+  "$PG_RESTORE_BIN" --list "$RESTORE_DUMP" >/dev/null
   PG_DATABASE_URL="$(bash scripts/database-url-for-pg.sh)"
   pm2 stop "$PM2_APP"
-  pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$PG_DATABASE_URL" "$RESTORE_DUMP"
+  "$PG_RESTORE_BIN" --clean --if-exists --no-owner --no-privileges --dbname "$PG_DATABASE_URL" "$RESTORE_DUMP"
 fi
 
 git checkout --detach "$TARGET_COMMIT"

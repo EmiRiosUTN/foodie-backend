@@ -108,6 +108,67 @@ export class ReservationsService {
     });
   }
 
+  async offlineBackup(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche"; specialServiceId?: string }) {
+    const restaurantId = this.restaurantScope(user);
+    const serviceDate = new Date(input.serviceDate);
+    if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
+
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: input.branchId, restaurantId },
+      select: { id: true, name: true, restaurant: { select: { name: true } } }
+    });
+    if (!branch) throw new NotFoundException("Branch not found");
+
+    const specialService = input.specialServiceId
+      ? await this.prisma.specialService.findFirst({
+          where: { id: input.specialServiceId, restaurantId, branchId: input.branchId, serviceDate },
+          select: { id: true, label: true, startTime: true, endTime: true }
+        })
+      : null;
+    if (input.specialServiceId && !specialService) throw new NotFoundException("Special service not found");
+    if (!input.specialServiceId && await this.prisma.specialService.count({ where: { restaurantId, branchId: input.branchId, serviceDate } })) {
+      throw new BadRequestException("Seleccioná un servicio especial para preparar el backup.");
+    }
+
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        restaurantId,
+        branchId: input.branchId,
+        serviceDate,
+        turn: input.turn,
+        status: { in: ["pending", "confirmed", "seated"] },
+        ...(input.specialServiceId ? { specialServiceId: input.specialServiceId } : {})
+      },
+      select: {
+        id: true,
+        code: true,
+        fullName: true,
+        phone: true,
+        partySize: true,
+        status: true,
+        serviceTime: true,
+        preferredZone: true,
+        notes: true,
+        room: { select: { id: true, name: true } },
+        tables: { include: { table: { select: { id: true, label: true, seats: true, metadata: true } } } },
+        specialService: { select: { id: true, label: true } }
+      },
+      orderBy: [{ serviceTime: "asc" }, { createdAt: "asc" }]
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      restaurant: { name: branch.restaurant.name },
+      branch: { id: branch.id, name: branch.name },
+      serviceDate: input.serviceDate,
+      turn: input.turn,
+      specialService,
+      totalReservations: reservations.length,
+      totalCovers: reservations.reduce((total, reservation) => total + reservation.partySize, 0),
+      reservations
+    };
+  }
+
   history(
     user: RequestUser,
     input: {

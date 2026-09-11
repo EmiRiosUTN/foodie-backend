@@ -54,6 +54,13 @@ const cancellationSchema = z.object({
   )
 });
 
+const offlineBackupSchema = z.object({
+  branchId: z.string().min(1),
+  serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  turn: z.enum(["mediodia", "noche"]),
+  specialServiceId: z.string().min(1).optional()
+});
+
 @Controller()
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
@@ -67,6 +74,11 @@ export class ReservationsController {
     @Query("specialServiceId") specialServiceId?: string
   ) {
     return this.reservationsService.list(user, { branchId, serviceDate, turn, specialServiceId });
+  }
+
+  @Get("restaurant/reservations/offline-backup")
+  offlineBackup(@CurrentUser() user: RequestUser, @Query() query: Record<string, unknown>) {
+    return this.reservationsService.offlineBackup(user, offlineBackupSchema.parse(query));
   }
 
   @Get("restaurant/reservations/history")

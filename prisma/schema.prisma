@@ -354,6 +354,7 @@ model Room {
   zones         RoomZone[]
   tables        Table[]
   reservations  Reservation[]
+  eventAssignments ReservationRoomAssignment[]
   bookingBlocks RoomBookingBlock[]
   bookingRules  RoomBookingRule[]
 
@@ -620,6 +621,7 @@ model Reservation {
   customer       Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
   specialService SpecialService?     @relation(fields: [specialServiceId], references: [id], onDelete: Restrict)
   tables         ReservationTable[]
+  eventRoomAssignments ReservationRoomAssignment[]
   deposit        ReservationDeposit?
 
   @@index([restaurantId, branchId, serviceDate, turn])
@@ -777,6 +779,23 @@ model ReservationTable {
   table         Table        @relation(fields: [tableId], references: [id], onDelete: Cascade)
 
   @@unique([reservationId, tableId])
+}
+
+// Additional room allocations are used exclusively by manual event reservations.
+// Reservation.roomId remains the primary room for backwards compatibility.
+model ReservationRoomAssignment {
+  id            String      @id @default(cuid())
+  reservationId String
+  roomId        String
+  allocatedCovers Int
+  usage         String      @default("partial")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  room          Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([reservationId, roomId])
+  @@index([roomId])
 }
 
 model ServiceState {

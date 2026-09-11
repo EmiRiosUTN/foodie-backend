@@ -26,6 +26,31 @@ const reservationSchema = z.object({
   manualTableSelection: z.boolean().optional()
 });
 
+const eventRoomSchema = z.object({
+  roomId: z.string().min(1),
+  allocatedCovers: z.number().int().min(1),
+  usage: z.enum(["partial", "full"])
+});
+
+const eventReservationSchema = z.object({
+  branchId: z.string().min(1),
+  fullName: z.string().min(2),
+  phone: z.string().min(2),
+  email: z.preprocess((value) => (typeof value === "string" && !value.trim() ? undefined : value), z.string().email().optional().nullable()),
+  partySize: z.number().int().min(1),
+  serviceDate: z.string().min(1),
+  serviceTime: z.string().regex(/^\d{2}:\d{2}$/),
+  notes: z.string().optional(),
+  rooms: z.array(eventRoomSchema).min(1),
+  exceptionReason: z.string().trim().max(500).optional(),
+  exceptionConfirmed: z.boolean().optional()
+});
+
+const eventRoomUpdateSchema = z.object({
+  rooms: z.array(eventRoomSchema).min(1),
+  exceptionReason: z.string().trim().max(500).optional()
+});
+
 const availableTableOptionsSchema = z.object({
   branchId: z.string().min(1),
   roomId: z.string().min(1),
@@ -97,6 +122,18 @@ export class ReservationsController {
   @Post("restaurant/reservations")
   create(@CurrentUser() user: RequestUser, @Body() body: unknown) {
     return this.reservationsService.create(user, reservationSchema.parse(body));
+  }
+
+  @Post("restaurant/reservations/events")
+  @Roles("restaurant_owner", "restaurant_manager", "events")
+  createEvent(@CurrentUser() user: RequestUser, @Body() body: unknown) {
+    return this.reservationsService.createEvent(user, eventReservationSchema.parse(body));
+  }
+
+  @Post("restaurant/reservations/:reservationId/event-rooms")
+  @Roles("restaurant_owner", "restaurant_manager", "events")
+  updateEventRooms(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Body() body: unknown) {
+    return this.reservationsService.updateEventRooms(user, reservationId, eventRoomUpdateSchema.parse(body));
   }
 
   @Get("restaurant/reservations/available-table-options")

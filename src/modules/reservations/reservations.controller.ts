@@ -41,14 +41,11 @@ const eventReservationSchema = z.object({
   serviceDate: z.string().min(1),
   serviceTime: z.string().regex(/^\d{2}:\d{2}$/),
   notes: z.string().optional(),
-  rooms: z.array(eventRoomSchema).min(1),
-  exceptionReason: z.string().trim().max(500).optional(),
-  exceptionConfirmed: z.boolean().optional()
+  rooms: z.array(eventRoomSchema).min(1)
 });
 
 const eventRoomUpdateSchema = z.object({
-  rooms: z.array(eventRoomSchema).min(1),
-  exceptionReason: z.string().trim().max(500).optional()
+  rooms: z.array(eventRoomSchema).min(1)
 });
 
 const availableTableOptionsSchema = z.object({

@@ -307,8 +307,6 @@ export class ReservationsService {
       serviceTime: string;
       notes?: string;
       rooms: Array<{ roomId: string; allocatedCovers: number; usage: "partial" | "full" }>;
-      exceptionReason?: string;
-      exceptionConfirmed?: boolean;
     }
   ) {
     const restaurantId = this.restaurantScope(user);
@@ -352,10 +350,6 @@ export class ReservationsService {
         allocatedCovers: assignment.allocatedCovers
       };
     }));
-    if (exceptions.some((exception) => exception.blocked || exception.exceedsCapacity) && (!input.exceptionReason?.trim() || !input.exceptionConfirmed)) {
-      throw new BadRequestException("ConfirmÃ¡ la excepciÃ³n e indicÃ¡ el motivo para usar un salon bloqueado o exceder su capacidad.");
-    }
-
     const created = await this.prisma.$transaction(async (tx) => {
       const roomIds = assignments.map((assignment) => assignment.roomId);
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Room" WHERE "id" IN (${Prisma.join(roomIds)}) FOR UPDATE`);
@@ -411,7 +405,7 @@ export class ReservationsService {
           source: "admin",
           durationMinutes: specialService?.durationMinutes || 180,
           turnoverMinutes: specialService?.turnoverMinutes || 0,
-          metadata: { event: { exceptionReason: input.exceptionReason?.trim() || null, exceptions } } as Prisma.InputJsonValue,
+          metadata: { event: { automaticOverride: exceptions.some((exception) => exception.blocked || exception.exceedsCapacity), exceptions } } as Prisma.InputJsonValue,
           eventRoomAssignments: { createMany: { data: assignments } }
         },
         include: {
@@ -432,7 +426,7 @@ export class ReservationsService {
       targetId: created.id,
       restaurantId,
       restaurantUserId: user.sub,
-      metadata: { code: created.code, exceptionReason: input.exceptionReason?.trim() || null, assignments, exceptions }
+      metadata: { code: created.code, automaticOverride: exceptions.some((exception) => exception.blocked || exception.exceedsCapacity), assignments, exceptions }
     });
     return created;
   }
@@ -440,7 +434,7 @@ export class ReservationsService {
   async updateEventRooms(
     user: RequestUser,
     reservationId: string,
-    input: { rooms: Array<{ roomId: string; allocatedCovers: number; usage: "partial" | "full" }>; exceptionReason?: string }
+    input: { rooms: Array<{ roomId: string; allocatedCovers: number; usage: "partial" | "full" }> }
   ) {
     const restaurantId = this.restaurantScope(user);
     if (!new Set(["restaurant_owner", "restaurant_manager", "events"]).has(String(user.role))) {
@@ -473,10 +467,6 @@ export class ReservationsService {
       const capacity = room.tables.reduce((total, table) => total + this.tableCapacity(table), 0);
       return { roomId: room.id, roomName: room.name, blocked: await this.isRoomBlocked(restaurantId, room.id, reservation.serviceDate, reservation.turn), exceedsCapacity: assignment.allocatedCovers > capacity, capacity, allocatedCovers: assignment.allocatedCovers };
     }));
-    if (exceptions.some((exception) => exception.blocked || exception.exceedsCapacity) && !input.exceptionReason?.trim()) {
-      throw new BadRequestException("IndicÃ¡ el motivo de la excepciÃ³n para usar un salon bloqueado o exceder su capacidad.");
-    }
-
     const updated = await this.prisma.$transaction(async (tx) => {
       const roomIds = assignments.map((assignment) => assignment.roomId);
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Room" WHERE "id" IN (${Prisma.join(roomIds)}) FOR UPDATE`);
@@ -505,14 +495,14 @@ export class ReservationsService {
         where: { id: reservation.id },
         data: {
           roomId: assignments[0].roomId,
-          metadata: { event: { exceptionReason: input.exceptionReason?.trim() || null, exceptions } } as Prisma.InputJsonValue,
+          metadata: { event: { automaticOverride: exceptions.some((exception) => exception.blocked || exception.exceedsCapacity), exceptions } } as Prisma.InputJsonValue,
           eventRoomAssignments: { createMany: { data: assignments } }
         },
         include: { room: true, branch: true, customer: { include: { tags: true } }, tables: { include: { table: true } }, eventRoomAssignments: { include: { room: true } }, specialService: true }
       });
     });
     this.realtimeService.publish("reservation.updated", { restaurantId, reservationId: updated.id, roomIds: assignments.map((assignment) => assignment.roomId) });
-    await this.auditService.log({ action: "reservation.event_rooms_updated", targetType: "reservation", targetId: updated.id, restaurantId, restaurantUserId: user.sub, metadata: { assignments, exceptionReason: input.exceptionReason?.trim() || null, exceptions } });
+    await this.auditService.log({ action: "reservation.event_rooms_updated", targetType: "reservation", targetId: updated.id, restaurantId, restaurantUserId: user.sub, metadata: { assignments, automaticOverride: exceptions.some((exception) => exception.blocked || exception.exceedsCapacity), exceptions } });
     return updated;
   }
 

@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { ConflictException, ForbiddenException, HttpException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, HttpException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { ReservationsService } from "../reservations/reservations.service";
@@ -750,6 +750,84 @@ export class IntegrationsService {
     });
 
     return reservation;
+  }
+
+  async searchExternalReservations(
+    apiKey: string,
+    input: { restaurantId?: string; fullName: string; serviceDate?: string; phone?: string }
+  ) {
+    const token = await this.resolveToken(apiKey, input.restaurantId);
+    if (!token) {
+      throw new ForbiddenException("Invalid API key");
+    }
+
+    const fullName = input.fullName.trim();
+    const phone = input.phone?.trim();
+    const serviceDate = input.serviceDate ? new Date(`${input.serviceDate}T00:00:00.000Z`) : undefined;
+    if (serviceDate && Number.isNaN(serviceDate.getTime())) {
+      throw new BadRequestException("Invalid service date");
+    }
+
+    await this.consumeRateLimit(token.restaurantId);
+
+    const where = {
+      restaurantId: token.restaurantId,
+      fullName: { equals: fullName, mode: "insensitive" as const },
+      ...(phone ? { phone } : {}),
+      ...(serviceDate ? { serviceDate } : {})
+    };
+    const [total, reservations] = await this.prisma.$transaction([
+      this.prisma.reservation.count({ where }),
+      this.prisma.reservation.findMany({
+        where,
+        select: {
+          code: true,
+          fullName: true,
+          phone: true,
+          partySize: true,
+          serviceDate: true,
+          serviceTime: true,
+          status: true,
+          branch: { select: { name: true } },
+          room: { select: { name: true } }
+        },
+        orderBy: [{ serviceDate: "asc" }, { serviceTime: "asc" }],
+        take: 50
+      })
+    ]);
+
+    await this.prisma.integrationToken.update({
+      where: { id: token.id },
+      data: { lastUsedAt: new Date() }
+    });
+
+    const results = reservations.map((reservation) => ({
+        code: reservation.code,
+        fullName: reservation.fullName,
+        phone: this.maskPhone(reservation.phone),
+        partySize: reservation.partySize,
+        serviceDate: reservation.serviceDate.toISOString().slice(0, 10),
+        serviceTime: reservation.serviceTime,
+        status: reservation.status,
+        branch: reservation.branch.name,
+        room: reservation.room.name
+      }))
+      .sort((left, right) => {
+        const leftDistance = Math.abs(new Date(`${left.serviceDate}T${left.serviceTime}:00`).getTime() - Date.now());
+        const rightDistance = Math.abs(new Date(`${right.serviceDate}T${right.serviceTime}:00`).getTime() - Date.now());
+        return leftDistance - rightDistance;
+      })
+      .slice(0, 10);
+
+    return {
+      total,
+      results
+    };
+  }
+
+  private maskPhone(phone: string) {
+    const value = phone.trim();
+    return value.length <= 4 ? value : `••••${value.slice(-4)}`;
   }
 
   private async resolveToken(apiKey: string, restaurantId?: string): Promise<ResolvedIntegrationToken | null> {

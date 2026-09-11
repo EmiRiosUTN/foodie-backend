@@ -96,6 +96,13 @@ const reservationCodeSchema = z.object({
   code: z.preprocess(emptyToUndefined, z.string().min(3))
 });
 
+const reservationNameSearchSchema = z.object({
+  restaurantId: optionalString,
+  fullName: z.preprocess(emptyToUndefined, z.string().min(2)),
+  serviceDate: z.preprocess(emptyToUndefined, z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
+  phone: optionalString
+});
+
 const updateReservationSchema = z.object({
   restaurantId: optionalString,
   code: z.preprocess(emptyToUndefined, z.string().min(3)),
@@ -228,5 +235,20 @@ export class IntegrationsController {
     @Query("serviceDate") serviceDate?: string
   ) {
     return this.integrationsService.findExternalReservation(apiKey, { restaurantId, code, phone, serviceDate });
+  }
+
+  @Public()
+  @Get("external/reservations/search")
+  searchExternalReservations(
+    @Headers("x-api-key") apiKey: string,
+    @Query("restaurantId") restaurantId?: string,
+    @Query("fullName") fullName?: string,
+    @Query("serviceDate") serviceDate?: string,
+    @Query("phone") phone?: string
+  ) {
+    return this.integrationsService.searchExternalReservations(
+      apiKey,
+      reservationNameSearchSchema.parse({ restaurantId, fullName, serviceDate, phone })
+    );
   }
 }

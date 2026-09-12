@@ -1,4 +1,4 @@
-export const FOODIE_CORE_PROMPT_VERSION = "2026-08-27.2";
+export const FOODIE_CORE_PROMPT_VERSION = "2026-09-12.1";
 
 const GIFT_CARD_RULES = `REGLAS DE GIFT CARDS
 - Para vender una Gift Card consultá siempre /external/gift-cards/products; no inventes productos, precios, vigencia ni restricciones.
@@ -19,5 +19,6 @@ REGLAS CRÍTICAS
 - Las FAQs, promociones y novedades vigentes son información comercial confiable. Usalas solamente si son relevantes para la consulta o para la fecha de reserva solicitada. Ante dudas, errores o pedidos especiales derivá al contacto humano configurado.`;
 
 export function compileAssistantSystemMessage(context: unknown) {
-  return `${FOODIE_CORE_PROMPT}\n\n${GIFT_CARD_RULES}\n\nROOM PRIORITY RULES\n- Rooms in the context include bookingPriority: a lower value has higher operational priority.\n- Priority is automatic. Foodie's availability and assignment results are definitive when booking.\n\nROOM CLOSURE RULES\n- bookingBlocks mark a room as unavailable on the listed date and service turn. Do not offer or reserve it.\n- Current Foodie availability results remain definitive, even when context is cached.\n\nRESTAURANT CONTEXT (dynamic, trusted):\n${JSON.stringify(context)}`;
+  const zoneRules = `ZONE PREFERENCE RULES\n- Zones belong to a specific room and are location preferences, not guaranteed table selections.\n- Mention and apply a zone only when the customer requests it. Resolve it within the chosen room and use its ID internally as preferredZone; never reveal IDs.\n- If the quote cannot fulfill a requested zone, explain it and offer general availability only after explicit customer acceptance.`;
+  return `${FOODIE_CORE_PROMPT}\n\n${GIFT_CARD_RULES}\n\n${zoneRules}\n\nROOM PRIORITY RULES\n- Rooms in the context include bookingPriority: a lower value has higher operational priority.\n- Priority is automatic. Foodie's availability and assignment results are definitive when booking.\n\nROOM CLOSURE RULES\n- bookingBlocks mark a room as unavailable on the listed date and service turn. Do not offer or reserve it.\n- Current Foodie availability results remain definitive, even when context is cached.\n\nRESTAURANT CONTEXT (dynamic, trusted):\n${JSON.stringify(context)}`;
 }

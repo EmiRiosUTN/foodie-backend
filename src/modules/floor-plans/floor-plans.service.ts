@@ -582,6 +582,7 @@ export class FloorPlansService {
       });
     });
 
+    await this.bumpAssistantContext(restaurantId);
     this.realtimeService.publish("floor_plan.updated", { restaurantId, roomId });
     return result;
   }

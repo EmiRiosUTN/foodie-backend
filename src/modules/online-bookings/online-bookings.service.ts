@@ -8,6 +8,7 @@ import { ReservationsService } from "../reservations/reservations.service";
 
 type Schedule = { isEnabled: boolean; startTime: string; endTime: string; intervalMin: number; service?: "lunch" | "dinner"; durationMinutes?: number; turnoverMinutes?: number; label?: string; specialServiceId?: string };
 const requests = new Map<string, number[]>();
+const ARGENTINA_TIMEZONE = "America/Argentina/Buenos_Aires";
 
 function serviceDate(date: string) { return new Date(`${date}T00:00:00.000Z`); }
 function weekday(date: string, timezone: string) {
@@ -172,14 +173,14 @@ export class OnlineBookingsService {
     const branch = await this.resolveBranch(restaurant.id, input.branch);
     if (!branch.isEnabled || !branch.publicBookingEnabled) throw new NotFoundException("Branch not found");
     if (input.partySize < settings.minPartySize || input.partySize > settings.maxPartySize) throw new BadRequestException("Party size is outside the allowed range");
-    this.validateWindow(input.date, settings, branch.timezone);
+    this.validateWindow(input.date, settings, ARGENTINA_TIMEZONE);
     if (settings.largePartyThreshold && input.partySize > settings.largePartyThreshold) return { date: input.date, partySize: input.partySize, slots: [], fallbackAction: "whatsapp" };
-    const schedules = await this.schedulesFor(restaurant.id, branch.id, input.date, branch.timezone);
+    const schedules = await this.schedulesFor(restaurant.id, branch.id, input.date, ARGENTINA_TIMEZONE);
     if (!schedules.length) return { date: input.date, partySize: input.partySize, slots: [] };
     const slots: Array<{ time: string; available: boolean }> = [];
     for (const schedule of schedules) for (let minute = timeToMinutes(schedule.startTime); minute + (schedule.durationMinutes || branch.onlineBookingDurationMinutes) + (schedule.turnoverMinutes || 0) <= timeToMinutes(schedule.endTime); minute += schedule.intervalMin) {
       const time = minutesToTime(minute);
-      if (!this.meetsAdvance(input.date, time, await this.minimumAdvance(restaurant.id, input.date, time, branch.timezone, settings.minAdvanceMinutes), branch.timezone)) continue;
+      if (!this.meetsAdvance(input.date, time, await this.minimumAdvance(restaurant.id, input.date, time, ARGENTINA_TIMEZONE, settings.minAdvanceMinutes), ARGENTINA_TIMEZONE)) continue;
       const available = await this.reservations.findAvailableRoomForRestaurant({ restaurantId: restaurant.id, branchId: branch.id, partySize: input.partySize, serviceDate: input.date, serviceTime: time, preferredFeatures: input.preferredFeatures, durationMinutes: schedule.durationMinutes || branch.onlineBookingDurationMinutes, turnoverMinutes: schedule.turnoverMinutes || 0 });
       if (available) slots.push({ time, available: true });
     }
@@ -202,11 +203,11 @@ export class OnlineBookingsService {
     const availableDates: string[] = [];
     for (const date of dates) {
       try {
-        this.validateWindow(date, settings, branch.timezone);
-        const schedules = await this.schedulesFor(restaurant.id, branch.id, date, branch.timezone);
+        this.validateWindow(date, settings, ARGENTINA_TIMEZONE);
+        const schedules = await this.schedulesFor(restaurant.id, branch.id, date, ARGENTINA_TIMEZONE);
         if (schedules.some((schedule) => {
           for (let minute = timeToMinutes(schedule.startTime); minute + (schedule.durationMinutes || branch.onlineBookingDurationMinutes) + (schedule.turnoverMinutes || 0) <= timeToMinutes(schedule.endTime); minute += schedule.intervalMin) {
-            if (this.meetsAdvance(date, minutesToTime(minute), settings.minAdvanceMinutes, branch.timezone)) return true;
+            if (this.meetsAdvance(date, minutesToTime(minute), settings.minAdvanceMinutes, ARGENTINA_TIMEZONE)) return true;
           }
           return false;
         })) availableDates.push(date);
@@ -221,11 +222,11 @@ export class OnlineBookingsService {
     const restaurant = await this.restaurantBySlug(slug); const settings = restaurant.onlineBooking!;
     const branch = await this.resolveBranch(restaurant.id, input.branch);
     if (input.partySize < settings.minPartySize || input.partySize > settings.maxPartySize) throw new BadRequestException("Party size is outside the allowed range");
-    this.validateWindow(input.date, settings, branch.timezone);
-    const schedules = await this.schedulesFor(restaurant.id, branch.id, input.date, branch.timezone);
+    this.validateWindow(input.date, settings, ARGENTINA_TIMEZONE);
+    const schedules = await this.schedulesFor(restaurant.id, branch.id, input.date, ARGENTINA_TIMEZONE);
     const schedule = schedules.find((item) => timeToMinutes(input.time) >= timeToMinutes(item.startTime) && timeToMinutes(input.time) + (item.durationMinutes || branch.onlineBookingDurationMinutes) + (item.turnoverMinutes || 0) <= timeToMinutes(item.endTime) && (timeToMinutes(input.time) - timeToMinutes(item.startTime)) % item.intervalMin === 0);
     if (!schedule) throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });
-    if (!this.meetsAdvance(input.date, input.time, await this.minimumAdvance(restaurant.id, input.date, input.time, branch.timezone, settings.minAdvanceMinutes), branch.timezone)) throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });
+    if (!this.meetsAdvance(input.date, input.time, await this.minimumAdvance(restaurant.id, input.date, input.time, ARGENTINA_TIMEZONE, settings.minAdvanceMinutes), ARGENTINA_TIMEZONE)) throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });
     const available = await this.reservations.findAvailableRoomForRestaurant({ restaurantId: restaurant.id, branchId: branch.id, partySize: input.partySize, serviceDate: input.date, serviceTime: input.time, preferredFeatures: input.preferredFeatures, durationMinutes: schedule.durationMinutes || branch.onlineBookingDurationMinutes, turnoverMinutes: schedule.turnoverMinutes || 0 });
     if (!available) throw new ConflictException({ code: "SLOT_UNAVAILABLE", message: "This time is no longer available" });
     try {

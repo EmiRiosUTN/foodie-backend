@@ -29,10 +29,9 @@ export class OnlineBookingsService {
     if (user.scope !== "restaurant" || !user.restaurantId) throw new ForbiddenException("Restaurant context required");
     return user.restaurantId;
   }
-  async listSpecialServices(user: RequestUser, input: { branchId: string; serviceDate: string }) {
+  async listSpecialServices(user: RequestUser, input: { branchId: string; serviceDate?: string }) {
     const restaurantId = this.restaurantScope(user);
-    const date = serviceDate(input.serviceDate);
-    return this.prisma.specialService.findMany({ where: { restaurantId, branchId: input.branchId, serviceDate: date }, orderBy: { position: "asc" } });
+    return this.prisma.specialService.findMany({ where: { restaurantId, branchId: input.branchId, ...(input.serviceDate ? { serviceDate: serviceDate(input.serviceDate) } : {}) }, orderBy: [{ serviceDate: "asc" }, { position: "asc" }] });
   }
   async saveSpecialServices(user: RequestUser, input: { branchId: string; serviceDate: string; services: Array<{ id?: string; label: string; startTime: string; endTime: string }> }) {
     const restaurantId = this.assertOwner(user);

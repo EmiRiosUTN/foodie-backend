@@ -26,7 +26,7 @@ export class OnlineBookingsController {
   constructor(private readonly service: OnlineBookingsService) {}
   @Get() get(@CurrentUser() user: RequestUser) { return this.service.getOwnerConfig(user); }
   @Put() save(@CurrentUser() user: RequestUser, @Body() body: unknown) { return this.service.saveOwnerConfig(user, configSchema.parse(body)); }
-  @Get("special-services") specialServices(@CurrentUser() user: RequestUser, @Query() query: unknown) { return this.service.listSpecialServices(user, z.object({ branchId: z.string().min(1), serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(query)); }
+  @Get("special-services") specialServices(@CurrentUser() user: RequestUser, @Query() query: unknown) { return this.service.listSpecialServices(user, z.object({ branchId: z.string().min(1), serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).parse(query)); }
   @Put("special-services") saveSpecialServices(@CurrentUser() user: RequestUser, @Body() body: unknown) { return this.service.saveSpecialServices(user, specialServicesSchema.parse(body)); }
 }
 

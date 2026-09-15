@@ -995,7 +995,6 @@ model GiftCard {
   restaurantId   String
   orderId        String                @unique
   displayCode    String                @unique
-  tokenHash      String                @unique
   originalAmount Decimal               @db.Decimal(12, 2)
   currency       String                @default("ARS")
   status         GiftCardStatus        @default(ACTIVE)
@@ -1003,7 +1002,6 @@ model GiftCard {
   validUntil     DateTime
   imageUrl       String?
   pdfUrl         String?
-  qrUrl          String?
   issuedAt       DateTime              @default(now())
   redeemedAt     DateTime?
   createdAt      DateTime              @default(now())

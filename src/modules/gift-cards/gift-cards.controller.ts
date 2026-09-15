@@ -40,7 +40,7 @@ export class GiftCardsController {
   @Roles("restaurant_owner")
   @Post("restaurant/gift-cards/orders/:id/payment") payment(@CurrentUser() user: RequestUser, @Param("id") id: string, @Body() body: { approved?: boolean; reference?: string }) { return this.service.confirmPayment(user, id, body.approved === true, body.reference); }
   @Roles("restaurant_owner")
-  @Post("restaurant/gift-cards/redeem") redeem(@CurrentUser() user: RequestUser, @Body() body: { code?: string; token?: string; notes?: string; reservationId?: string }) { return this.service.redeem(user, body); }
+  @Post("restaurant/gift-cards/redeem") redeem(@CurrentUser() user: RequestUser, @Body() body: { code?: string; notes?: string; reservationId?: string }) { return this.service.redeem(user, body); }
 
   @Public()
   @Get("external/gift-cards/products") externalProducts(@Headers("x-api-key") apiKey: string) { return this.service.listExternalProducts(apiKey); }
@@ -48,6 +48,4 @@ export class GiftCardsController {
   @Post("external/gift-cards/orders") externalCreate(@Headers("x-api-key") apiKey: string, @Headers("idempotency-key") idempotencyKey: string | undefined, @Body() body: unknown) { return this.service.createExternal(apiKey, parseOrder(body), idempotencyKey); }
   @Public()
   @Get("external/gift-cards/orders/:id") externalGet(@Headers("x-api-key") apiKey: string, @Param("id") id: string) { return this.service.getExternal(apiKey, id); }
-  @Public()
-  @Get("public/gift-cards/validate/:token") validate(@Param("token") token: string) { return this.service.validatePublicToken(token); }
 }

@@ -1,8 +1,17 @@
 import { createHash, randomBytes } from "node:crypto";
 
+const humanCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function createHumanCode(length: number) {
+  return Array.from(randomBytes(length), (byte) => humanCodeAlphabet[byte & 31]).join("");
+}
+
 export function createReservationCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from(randomBytes(6), (byte) => alphabet[byte & 31]).join("");
+  return createHumanCode(6);
+}
+
+export function createGiftCardCode() {
+  return createHumanCode(8);
 }
 
 export function normalizeReservationCode(value: string) {

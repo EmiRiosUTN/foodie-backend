@@ -2,7 +2,6 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma, GiftCardProductType, GiftCardStatus } from "@prisma/client";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
 import PDFDocument from "pdfkit";
 import sharp from "sharp";
 import { AuditService } from "../audit/audit.service";
@@ -10,6 +9,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import type { RequestUser } from "../../common/auth/request-user";
 import { hashOpaqueToken } from "../../common/security/token-hash";
 import { verifyPassword } from "../../common/security/password";
+import { createGiftCardCode } from "../../common/utils/code";
 
 type ProductInput = { name: string; type: GiftCardProductType; description: string; price?: number | null; minAmount?: number | null; maxAmount?: number | null; partySize?: number | null; currency?: string; validityDays: number; excludedDates?: string[]; restrictions?: Record<string, unknown> | null; paymentAlias?: string | null; paymentCbu?: string | null; paymentHolder?: string | null; isActive: boolean };
 type OrderInput = { productId?: string; type: GiftCardProductType; purchaserName: string; purchaserPhone: string; recipientName?: string | null; message?: string | null; partySize?: number | null; amount?: number; currency?: string };
@@ -102,7 +102,7 @@ export class GiftCardsService {
     if (!order) throw new NotFoundException("Gift Card order not found");
     if (order.paymentStatus === "CONFIRMED" && order.giftCard) return { order: order.id, giftCard: this.giftCardView(order.giftCard) };
     if (!approved) { const rejected = await this.prisma.giftCardOrder.update({ where: { id: order.id }, data: { paymentStatus: "REJECTED", status: "CANCELLED", paymentReference: reference || null } }); await this.audit.log({ action: "gift_card.payment.rejected", targetType: "gift_card_order", targetId: order.id, restaurantId, restaurantUserId: user.sub }); return { order: rejected.id, status: rejected.status }; }
-    const displayCode = `GC-${randomBytes(3).toString("hex").toUpperCase().match(/.{1,2}/g)!.join("-")}`;
+    const displayCode = createGiftCardCode();
     const validFrom = new Date(); const validityDays = order.product?.validityDays || 180; const validUntil = new Date(validFrom); validUntil.setUTCDate(validUntil.getUTCDate() + validityDays);
     const assets = await this.generateAssets(order, displayCode, validUntil);
     const result = await this.prisma.$transaction(async (tx) => {
@@ -126,14 +126,14 @@ export class GiftCardsService {
 
   private async generateAssets(order: any, code: string, validUntil: Date) {
     const directory = join(process.cwd(), "uploads", "gift-cards", order.restaurantId, order.id); await mkdir(directory, { recursive: true });
-    const assetsDirectory = join(process.cwd(), "assets"); const templatePath = join(assetsDirectory, "gift-card-template.png"); const fontPath = join(assetsDirectory, "fonts", "Montserrat-Variable.ttf");
+    const assetsDirectory = join(process.cwd(), "assets"); const templatePath = join(assetsDirectory, "gift-card-template.png"); const fontPath = join(assetsDirectory, "fonts", "Montserrat-Variable.ttf"); const boldFontPath = join(assetsDirectory, "fonts", "Montserrat-Bold.ttf"); const semiBoldFontPath = join(assetsDirectory, "fonts", "Montserrat-SemiBold.ttf");
     process.env.FONTCONFIG_FILE ??= join(assetsDirectory, "fonts", "fonts.conf"); process.env.XDG_CACHE_HOME ??= join(process.cwd(), "uploads", ".cache"); await mkdir(join(process.env.XDG_CACHE_HOME, "fontconfig"), { recursive: true });
     const value = order.type === "FIXED_MENU" ? order.product?.name || "Gift Card" : displayAmount(order.amount, order.currency);
-    const date = displayDate(validUntil); const valueSize = order.type === "FIXED_MENU" ? 28 : 34;
-    const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440"><style>text { font-family: Montserrat, sans-serif; fill: #282621; }</style><text x="785" y="798" text-anchor="middle" font-size="${valueSize}" font-weight="700">${escapeXml(value)}</text><text x="785" y="865" text-anchor="middle" font-size="20" font-weight="600" letter-spacing="1.5">${escapeXml(code)}</text><text x="410" y="978" text-anchor="middle" font-size="19" font-weight="500">${escapeXml(date)}</text></svg>`;
+    const date = displayDate(validUntil); const valueSize = order.type === "FIXED_MENU" ? 30 : 36;
+    const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; }</style><text x="785" y="798" text-anchor="middle" transform="rotate(-4 785 798)" font-size="${valueSize}" font-weight="800" stroke="#282621" stroke-width="0.45">${escapeXml(value)}</text><text x="785" y="865" text-anchor="middle" transform="rotate(-4 785 865)" font-size="22" font-weight="700" stroke="#282621" stroke-width="0.3" letter-spacing="1.8">${escapeXml(code)}</text><text x="410" y="978" text-anchor="middle" transform="rotate(-4 410 978)" font-size="20" font-weight="700" stroke="#282621" stroke-width="0.25">${escapeXml(date)}</text></svg>`;
     const imageFile = `gift-card-${code}.png`; const imagePath = join(directory, imageFile); await sharp(templatePath).composite([{ input: Buffer.from(overlay) }]).png().toFile(imagePath);
     const pdfFile = `gift-card-${code}.pdf`; const pdfPath = join(directory, pdfFile); const templateBuffer = await readFile(templatePath);
-    await new Promise<void>((resolve, reject) => { const doc = new PDFDocument({ size: [540, 720], margin: 0 }); const chunks: Buffer[] = []; doc.on("data", (chunk: Buffer) => chunks.push(chunk)); doc.on("end", async () => { try { await writeFile(pdfPath, Buffer.concat(chunks)); resolve(); } catch (error) { reject(error); } }); doc.on("error", reject); doc.image(templateBuffer, 0, 0, { width: 540, height: 720 }); doc.registerFont("Montserrat", fontPath); doc.font("Montserrat").fillColor("#282621").fontSize(valueSize / 2).text(value, 315, 381, { width: 155, align: "center", lineBreak: false }); doc.fontSize(10).text(code, 315, 421, { width: 155, align: "center", characterSpacing: 0.75 }); doc.fontSize(9.5).text(date, 130, 472, { width: 150, align: "center" }); doc.end(); });
+    await new Promise<void>((resolve, reject) => { const doc = new PDFDocument({ size: [540, 720], margin: 0 }); const chunks: Buffer[] = []; doc.on("data", (chunk: Buffer) => chunks.push(chunk)); doc.on("end", async () => { try { await writeFile(pdfPath, Buffer.concat(chunks)); resolve(); } catch (error) { reject(error); } }); doc.on("error", reject); doc.image(templateBuffer, 0, 0, { width: 540, height: 720 }); doc.registerFont("Montserrat", fontPath); doc.registerFont("Montserrat Bold", boldFontPath); doc.registerFont("Montserrat SemiBold", semiBoldFontPath); doc.save().rotate(-4, { origin: [392.5, 399] }).font("Montserrat Bold").fillColor("#282621").fontSize(valueSize / 2).text(value, 315, 381, { width: 155, align: "center", lineBreak: false }).restore(); doc.save().rotate(-4, { origin: [392.5, 432.5] }).font("Montserrat SemiBold").fontSize(11).text(code, 315, 421, { width: 155, align: "center", characterSpacing: 0.9 }).restore(); doc.save().rotate(-4, { origin: [205, 489] }).font("Montserrat SemiBold").fontSize(10).text(date, 130, 472, { width: 150, align: "center" }).restore(); doc.end(); });
     const base = `/uploads/gift-cards/${order.restaurantId}/${order.id}`; return { imageUrl: `${base}/${imageFile}`, pdfUrl: `${base}/${pdfFile}` };
   }
 }

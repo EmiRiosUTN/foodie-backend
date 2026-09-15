@@ -1,6 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma, GiftCardProductType, GiftCardStatus } from "@prisma/client";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import PDFDocument from "pdfkit";
 import sharp from "sharp";
@@ -21,8 +21,8 @@ const displayAmount = (amount: Prisma.Decimal | number, currency: string) => new
 const escapeXml = (value: string) => value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&quot;", '"': "&quot;", "'": "&apos;" })[character]!);
 
 const GIFT_CARD_TEXT_ANGLE = -4;
-const GIFT_CARD_RIGHT_BLOCK = { centerX: 785, centerY: 830, width: 250, valueBaseline: 798, codeBaseline: 865 };
-const GIFT_CARD_DATE_BLOCK = { centerX: 410, centerY: 978, width: 220, dateBaseline: 978 };
+const GIFT_CARD_RIGHT_BLOCK = { centerX: 785, centerY: 830, width: 300, height: 180, valueBaseline: 798, codeBaseline: 865 };
+const GIFT_CARD_DATE_BLOCK = { centerX: 410, centerY: 978, width: 240, height: 80, dateBaseline: 978 };
 
 type GiftCardValueLayout = { lines: string[]; fontSize: number; lineHeight: number };
 
@@ -66,6 +66,17 @@ function fixedMenuValueLayout(value: string): GiftCardValueLayout {
 function giftCardValueLayout(value: string, type: GiftCardProductType): GiftCardValueLayout {
   if (type === "OPEN_AMOUNT") return { lines: [value], fontSize: 36, lineHeight: 43 };
   return fixedMenuValueLayout(value);
+}
+
+async function rotateTextBlock(svg: string, width: number, height: number, centerX: number, centerY: number) {
+  const horizontal = await sharp(Buffer.from(svg)).png().toBuffer();
+  const rotated = await sharp(horizontal).rotate(GIFT_CARD_TEXT_ANGLE, { background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+  const metadata = await sharp(rotated).metadata();
+  return {
+    input: rotated,
+    left: Math.round(centerX - (metadata.width ?? width) / 2),
+    top: Math.round(centerY - (metadata.height ?? height) / 2),
+  };
 }
 
 @Injectable()
@@ -174,18 +185,26 @@ export class GiftCardsService {
 
   private async generateAssets(order: any, code: string, validUntil: Date) {
     const directory = join(process.cwd(), "uploads", "gift-cards", order.restaurantId, order.id); await mkdir(directory, { recursive: true });
-    const assetsDirectory = join(process.cwd(), "assets"); const templatePath = join(assetsDirectory, "gift-card-template.png"); const fontPath = join(assetsDirectory, "fonts", "Montserrat-Variable.ttf"); const boldFontPath = join(assetsDirectory, "fonts", "Montserrat-Bold.ttf"); const semiBoldFontPath = join(assetsDirectory, "fonts", "Montserrat-SemiBold.ttf");
+    const assetsDirectory = join(process.cwd(), "assets"); const templatePath = join(assetsDirectory, "gift-card-template.png");
     process.env.FONTCONFIG_FILE ??= join(assetsDirectory, "fonts", "fonts.conf"); process.env.XDG_CACHE_HOME ??= join(process.cwd(), "uploads", ".cache"); await mkdir(join(process.env.XDG_CACHE_HOME, "fontconfig"), { recursive: true });
     const value = order.type === "FIXED_MENU" ? order.product?.name || "Gift Card" : displayAmount(order.amount, order.currency);
     const date = displayDate(validUntil); const valueLayout = giftCardValueLayout(value, order.type);
     const valueBaselines = valueLayout.lines.length === 1
       ? [GIFT_CARD_RIGHT_BLOCK.valueBaseline]
       : valueLayout.lines.map((_, index) => GIFT_CARD_RIGHT_BLOCK.valueBaseline - (valueLayout.lineHeight / 2) + (index * valueLayout.lineHeight));
-    const svgValueLines = valueLayout.lines.map((line, index) => `<text x="${GIFT_CARD_RIGHT_BLOCK.centerX}" y="${valueBaselines[index]}" text-anchor="middle" font-size="${valueLayout.fontSize}" font-weight="800" stroke="#282621" stroke-width="0.45">${escapeXml(line)}</text>`).join("");
-    const overlay = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; }</style><g transform="rotate(${GIFT_CARD_TEXT_ANGLE} ${GIFT_CARD_RIGHT_BLOCK.centerX} ${GIFT_CARD_RIGHT_BLOCK.centerY})">${svgValueLines}<text x="${GIFT_CARD_RIGHT_BLOCK.centerX}" y="${GIFT_CARD_RIGHT_BLOCK.codeBaseline}" text-anchor="middle" font-size="22" font-weight="700" stroke="#282621" stroke-width="0.3" letter-spacing="1.8">${escapeXml(code)}</text></g><g transform="rotate(${GIFT_CARD_TEXT_ANGLE} ${GIFT_CARD_DATE_BLOCK.centerX} ${GIFT_CARD_DATE_BLOCK.centerY})"><text x="${GIFT_CARD_DATE_BLOCK.centerX}" y="${GIFT_CARD_DATE_BLOCK.dateBaseline}" text-anchor="middle" font-size="20" font-weight="700" stroke="#282621" stroke-width="0.25">${escapeXml(date)}</text></g></svg>`;
-    const imageFile = `gift-card-${code}.png`; const imagePath = join(directory, imageFile); await sharp(templatePath).composite([{ input: Buffer.from(overlay) }]).png().toFile(imagePath);
-    const pdfFile = `gift-card-${code}.pdf`; const pdfPath = join(directory, pdfFile); const templateBuffer = await readFile(templatePath);
-    await new Promise<void>((resolve, reject) => { const doc = new PDFDocument({ size: [540, 720], margin: 0 }); const chunks: Buffer[] = []; doc.on("data", (chunk: Buffer) => chunks.push(chunk)); doc.on("end", async () => { try { await writeFile(pdfPath, Buffer.concat(chunks)); resolve(); } catch (error) { reject(error); } }); doc.on("error", reject); doc.image(templateBuffer, 0, 0, { width: 540, height: 720 }); doc.registerFont("Montserrat", fontPath); doc.registerFont("Montserrat Bold", boldFontPath); doc.registerFont("Montserrat SemiBold", semiBoldFontPath); doc.save().rotate(GIFT_CARD_TEXT_ANGLE, { origin: [GIFT_CARD_RIGHT_BLOCK.centerX / 2, GIFT_CARD_RIGHT_BLOCK.centerY / 2] }).font("Montserrat Bold").fillColor("#282621").fontSize(valueLayout.fontSize / 2); valueLayout.lines.forEach((line, index) => doc.text(line, (GIFT_CARD_RIGHT_BLOCK.centerX - GIFT_CARD_RIGHT_BLOCK.width / 2) / 2, (valueBaselines[index] - valueLayout.fontSize) / 2, { width: GIFT_CARD_RIGHT_BLOCK.width / 2, align: "center", lineBreak: false })); doc.font("Montserrat SemiBold").fontSize(11).text(code, (GIFT_CARD_RIGHT_BLOCK.centerX - GIFT_CARD_RIGHT_BLOCK.width / 2) / 2, (GIFT_CARD_RIGHT_BLOCK.codeBaseline - 22) / 2, { width: GIFT_CARD_RIGHT_BLOCK.width / 2, align: "center", lineBreak: false, characterSpacing: 0.9 }).restore(); doc.save().rotate(GIFT_CARD_TEXT_ANGLE, { origin: [GIFT_CARD_DATE_BLOCK.centerX / 2, GIFT_CARD_DATE_BLOCK.centerY / 2] }).font("Montserrat SemiBold").fontSize(10).text(date, (GIFT_CARD_DATE_BLOCK.centerX - GIFT_CARD_DATE_BLOCK.width / 2) / 2, (GIFT_CARD_DATE_BLOCK.dateBaseline - 20) / 2, { width: GIFT_CARD_DATE_BLOCK.width / 2, align: "center", lineBreak: false }).restore(); doc.end(); });
+    const rightTop = GIFT_CARD_RIGHT_BLOCK.centerY - (GIFT_CARD_RIGHT_BLOCK.height / 2);
+    const dateTop = GIFT_CARD_DATE_BLOCK.centerY - (GIFT_CARD_DATE_BLOCK.height / 2);
+    const svgValueLines = valueLayout.lines.map((line, index) => `<text x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${valueBaselines[index] - rightTop}" text-anchor="middle" font-size="${valueLayout.fontSize}" font-weight="800" stroke="#282621" stroke-width="0.45">${escapeXml(line)}</text>`).join("");
+    const rightBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_RIGHT_BLOCK.width}" height="${GIFT_CARD_RIGHT_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; }</style>${svgValueLines}<text x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${GIFT_CARD_RIGHT_BLOCK.codeBaseline - rightTop}" text-anchor="middle" font-size="22" font-weight="700" stroke="#282621" stroke-width="0.3" letter-spacing="1.8">${escapeXml(code)}</text></svg>`;
+    const dateBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_DATE_BLOCK.width}" height="${GIFT_CARD_DATE_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; }</style><text x="${GIFT_CARD_DATE_BLOCK.width / 2}" y="${GIFT_CARD_DATE_BLOCK.dateBaseline - dateTop}" text-anchor="middle" font-size="20" font-weight="700" stroke="#282621" stroke-width="0.25">${escapeXml(date)}</text></svg>`;
+    const [rightBlock, dateBlock] = await Promise.all([
+      rotateTextBlock(rightBlockSvg, GIFT_CARD_RIGHT_BLOCK.width, GIFT_CARD_RIGHT_BLOCK.height, GIFT_CARD_RIGHT_BLOCK.centerX, GIFT_CARD_RIGHT_BLOCK.centerY),
+      rotateTextBlock(dateBlockSvg, GIFT_CARD_DATE_BLOCK.width, GIFT_CARD_DATE_BLOCK.height, GIFT_CARD_DATE_BLOCK.centerX, GIFT_CARD_DATE_BLOCK.centerY),
+    ]);
+    const renderedImage = await sharp(templatePath).composite([rightBlock, dateBlock]).png().toBuffer();
+    const imageFile = `gift-card-${code}.png`; const imagePath = join(directory, imageFile); await writeFile(imagePath, renderedImage);
+    const pdfFile = `gift-card-${code}.pdf`; const pdfPath = join(directory, pdfFile);
+    await new Promise<void>((resolve, reject) => { const doc = new PDFDocument({ size: [540, 720], margin: 0 }); const chunks: Buffer[] = []; doc.on("data", (chunk: Buffer) => chunks.push(chunk)); doc.on("end", async () => { try { await writeFile(pdfPath, Buffer.concat(chunks)); resolve(); } catch (error) { reject(error); } }); doc.on("error", reject); doc.image(renderedImage, 0, 0, { width: 540, height: 720 }); doc.end(); });
     const base = `/uploads/gift-cards/${order.restaurantId}/${order.id}`; return { imageUrl: `${base}/${imageFile}`, pdfUrl: `${base}/${pdfFile}` };
   }
 }

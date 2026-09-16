@@ -21,8 +21,8 @@ const displayAmount = (amount: Prisma.Decimal | number, currency: string) => new
 const escapeXml = (value: string) => value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&quot;", '"': "&quot;", "'": "&apos;" })[character]!);
 
 const GIFT_CARD_TEXT_ANGLE = -4;
-const GIFT_CARD_RIGHT_BLOCK = { centerX: 785, centerY: 830, width: 300, height: 180, valueBaseline: 798, codeBaseline: 865 };
-const GIFT_CARD_DATE_BLOCK = { centerX: 410, centerY: 978, width: 240, height: 80, dateBaseline: 978 };
+const GIFT_CARD_RIGHT_BLOCK = { centerX: 775, centerY: 830, width: 300, height: 180, valueBaseline: 798, codeBaseline: 865 };
+const GIFT_CARD_DATE_BLOCK = { centerX: 380, centerY: 978, width: 240, height: 80, dateBaseline: 978 };
 
 type GiftCardValueLayout = { lines: string[]; fontSize: number; lineHeight: number };
 

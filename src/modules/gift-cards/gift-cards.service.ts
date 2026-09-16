@@ -1,6 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma, GiftCardProductType, GiftCardStatus } from "@prisma/client";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import PDFDocument from "pdfkit";
 import sharp from "sharp";
@@ -173,12 +173,45 @@ export class GiftCardsService {
     return { order: order.id, giftCard: this.giftCardView(result) };
   }
 
+  async cancelOrder(user: RequestUser, orderId: string) {
+    const restaurantId = this.owner(user);
+    const order = await this.prisma.giftCardOrder.findFirst({ where: { id: orderId, restaurantId }, include: { giftCard: { include: { redemptions: { select: { id: true }, take: 1 } } } } });
+    if (!order) throw new NotFoundException("Gift Card order not found");
+    if (order.status === "CANCELLED") throw new ConflictException("La orden ya está cancelada");
+    if (!["PENDING_PAYMENT", "PAID"].includes(order.status)) throw new ConflictException("La orden no puede cancelarse en su estado actual");
+    if (order.giftCard && (order.giftCard.status !== GiftCardStatus.ACTIVE || order.giftCard.redemptions.length > 0)) {
+      throw new ConflictException("La Gift Card ya fue canjeada o no está activa");
+    }
+
+    const cancelled = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.giftCardOrder.updateMany({ where: { id: order.id, restaurantId, status: { in: ["PENDING_PAYMENT", "PAID"] } }, data: { status: "CANCELLED" } });
+      if (updated.count !== 1) throw new ConflictException("La orden cambió mientras se cancelaba");
+      if (order.giftCard) await tx.giftCard.updateMany({ where: { id: order.giftCard.id, status: "ACTIVE" }, data: { status: GiftCardStatus.CANCELLED } });
+      return tx.giftCardOrder.findUniqueOrThrow({ where: { id: order.id } });
+    });
+    await this.audit.log({ action: "gift_card.order.cancelled", targetType: "gift_card_order", targetId: order.id, restaurantId, restaurantUserId: user.sub, metadata: { hadGiftCard: Boolean(order.giftCard) } });
+    return { id: cancelled.id, status: cancelled.status };
+  }
+
+  async deleteCancelledOrder(user: RequestUser, orderId: string) {
+    const restaurantId = this.owner(user);
+    const order = await this.prisma.giftCardOrder.findFirst({ where: { id: orderId, restaurantId }, include: { giftCard: { include: { redemptions: { select: { id: true }, take: 1 } } } } });
+    if (!order) throw new NotFoundException("Gift Card order not found");
+    if (order.status !== "CANCELLED") throw new ConflictException("Solo se pueden eliminar órdenes canceladas");
+    if (order.giftCard?.redemptions.length) throw new ConflictException("No se puede eliminar una Gift Card canjeada");
+
+    await this.prisma.giftCardOrder.delete({ where: { id: order.id } });
+    await rm(join(process.cwd(), "uploads", "gift-cards", restaurantId, order.id), { recursive: true, force: true });
+    await this.audit.log({ action: "gift_card.order.deleted", targetType: "gift_card_order", targetId: order.id, restaurantId, restaurantUserId: user.sub, metadata: { hadGiftCard: Boolean(order.giftCard) } });
+    return { id: order.id, deleted: true };
+  }
+
   async redeem(user: RequestUser, input: { code?: string; notes?: string; reservationId?: string }) {
     const restaurantId = this.owner(user); const code = input.code?.trim(); if (!code) throw new ConflictException("Gift Card code is required"); const card = await this.prisma.giftCard.findFirst({ where: { restaurantId, displayCode: code }, include: { order: true } });
     if (!card) throw new NotFoundException("Gift Card not found");
     if (card.status !== "ACTIVE") throw new ConflictException("Gift Card is not active");
     if (card.validUntil < new Date()) { await this.prisma.giftCard.update({ where: { id: card.id }, data: { status: "EXPIRED" } }); throw new ConflictException("Gift Card expired"); }
-    const redeemed = await this.prisma.$transaction(async (tx) => { const locked = await tx.giftCard.updateMany({ where: { id: card.id, status: "ACTIVE" }, data: { status: "REDEEMED", redeemedAt: new Date() } }); if (locked.count !== 1) throw new ConflictException("Gift Card already redeemed"); await tx.giftCardRedemption.create({ data: { giftCardId: card.id, restaurantId, redeemedBy: user.sub, reservationId: input.reservationId, notes: input.notes } }); return tx.giftCard.findUniqueOrThrow({ where: { id: card.id } }); });
+    const redeemed = await this.prisma.$transaction(async (tx) => { const locked = await tx.giftCard.updateMany({ where: { id: card.id, status: "ACTIVE" }, data: { status: "REDEEMED", redeemedAt: new Date() } }); if (locked.count !== 1) throw new ConflictException("Gift Card already redeemed"); await tx.giftCardOrder.update({ where: { id: card.orderId }, data: { status: "REDEEMED" } }); await tx.giftCardRedemption.create({ data: { giftCardId: card.id, restaurantId, redeemedBy: user.sub, reservationId: input.reservationId, notes: input.notes } }); return tx.giftCard.findUniqueOrThrow({ where: { id: card.id } }); });
     await this.audit.log({ action: "gift_card.redeemed", targetType: "gift_card", targetId: card.id, restaurantId, restaurantUserId: user.sub, metadata: { reservationId: input.reservationId || null } });
     return this.giftCardView(redeemed);
   }

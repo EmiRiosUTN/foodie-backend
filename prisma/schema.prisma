@@ -111,6 +111,7 @@ enum GiftCardPaymentStatus {
 enum GiftCardOrderStatus {
   PENDING_PAYMENT
   PAID
+  REDEEMED
   CANCELLED
 }
 

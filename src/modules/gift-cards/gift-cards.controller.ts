@@ -40,6 +40,10 @@ export class GiftCardsController {
   @Roles("restaurant_owner")
   @Post("restaurant/gift-cards/orders/:id/payment") payment(@CurrentUser() user: RequestUser, @Param("id") id: string, @Body() body: { approved?: boolean; reference?: string }) { return this.service.confirmPayment(user, id, body.approved === true, body.reference); }
   @Roles("restaurant_owner")
+  @Post("restaurant/gift-cards/orders/:id/cancel") cancel(@CurrentUser() user: RequestUser, @Param("id") id: string) { return this.service.cancelOrder(user, id); }
+  @Roles("restaurant_owner")
+  @Delete("restaurant/gift-cards/orders/:id") delete(@CurrentUser() user: RequestUser, @Param("id") id: string) { return this.service.deleteCancelledOrder(user, id); }
+  @Roles("restaurant_owner")
   @Post("restaurant/gift-cards/redeem") redeem(@CurrentUser() user: RequestUser, @Body() body: { code?: string; notes?: string; reservationId?: string }) { return this.service.redeem(user, body); }
 
   @Public()

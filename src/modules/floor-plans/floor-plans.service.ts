@@ -350,17 +350,27 @@ export class FloorPlansService {
   }
 
   private async layoutTablesOrThrow(restaurantId: string, roomId: string) {
-    const room = await this.prisma.room.findFirst({ where: { id: roomId, restaurantId, isActive: true } });
+    const room = await this.prisma.room.findFirst({
+      where: { id: roomId, restaurantId, isActive: true },
+      include: { branch: { select: { timezone: true } } }
+    });
     if (!room) throw new NotFoundException("Room not found");
-    return this.prisma.table.findMany({
+    const tables = await this.prisma.table.findMany({
       where: { restaurantId, roomId, isActive: true },
       select: { id: true, label: true, shape: true, seats: true, x: true, y: true, width: true, height: true, rotation: true, isReservable: true, zoneId: true, metadata: true }
     });
+    return { tables, timezone: room.branch.timezone };
   }
 
-  private layoutImpactTableIds(existingTables: Awaited<ReturnType<FloorPlansService["layoutTablesOrThrow"]>>, input: LayoutInput) {
+  private layoutImpactTableIds(existingTables: Awaited<ReturnType<FloorPlansService["layoutTablesOrThrow"]>>["tables"], input: LayoutInput) {
     const incomingById = new Map(input.tables.map((table) => [table.id, table]));
     return existingTables.filter((table) => this.tableChangedByLayout(table, incomingById.get(table.id))).map((table) => table.id);
+  }
+
+  private todayInTimezone(timezone: string) {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || "";
+    return new Date(`${value("year")}-${value("month")}-${value("day")}T00:00:00.000Z`);
   }
 
   private reservationLayoutCompatibility(
@@ -380,17 +390,27 @@ export class FloorPlansService {
     return { missingTable, nonReservableTable, capacity, isCompatible: !missingTable && !nonReservableTable && capacity >= reservation.partySize };
   }
 
-  async layoutImpact(user: RequestUser, roomId: string, input: LayoutInput) {
+  async layoutImpact(user: RequestUser, roomId: string, input: LayoutInput, focusTableId?: string) {
     const restaurantId = this.restaurantScope(user);
-    const existingTables = await this.layoutTablesOrThrow(restaurantId, roomId);
-    const affectedTableIds = this.layoutImpactTableIds(existingTables, input);
+    const { tables: existingTables, timezone } = await this.layoutTablesOrThrow(restaurantId, roomId);
+    const changedTableIds = this.layoutImpactTableIds(existingTables, input);
+    if (focusTableId && !existingTables.some((table) => table.id === focusTableId)) {
+      throw new NotFoundException("Table not found in this room");
+    }
+    if (focusTableId && !changedTableIds.includes(focusTableId)) {
+      throw new ConflictException("The selected table is not affected by this layout");
+    }
+    const affectedTableIds = focusTableId ? [focusTableId] : changedTableIds;
     if (!affectedTableIds.length) return { affectedTableIds: [], reservations: [], excludedTableIds: [] };
+
+    const today = this.todayInTimezone(timezone);
 
     const [reservations, occupiedStates] = await Promise.all([
       this.prisma.reservation.findMany({
         where: {
           restaurantId,
           status: { in: ["pending", "confirmed", "seated"] },
+          serviceDate: { gte: today },
           tables: { some: { tableId: { in: affectedTableIds } } }
         },
         include: { branch: true, room: true, customer: { include: { tags: true } }, tables: { include: { table: true } }, eventRoomAssignments: { include: { room: true } } },
@@ -414,8 +434,11 @@ export class FloorPlansService {
       return { reservation, affectedTables, requiresReassignment, blocksLayout, reasons, finalCapacity: compatibility.capacity };
     });
 
-    const excludedTableIds = input.tables.filter((table) => !table.isReservable).map((table) => table.id).concat(existingTables.filter((table) => !input.tables.some((next) => next.id === table.id)).map((table) => table.id));
-    return { affectedTableIds, reservations: impacted, excludedTableIds: [...new Set([...excludedTableIds, ...affectedTableIds])] };
+    const excludedTableIds = input.tables
+      .filter((table) => !table.isReservable)
+      .map((table) => table.id)
+      .concat(existingTables.filter((table) => !input.tables.some((next) => next.id === table.id)).map((table) => table.id));
+    return { affectedTableIds, reservations: impacted, excludedTableIds: [...new Set(excludedTableIds)] };
   }
 
   private async assertLayoutReservationsRemainCompatible(
@@ -423,11 +446,12 @@ export class FloorPlansService {
     restaurantId: string,
     roomId: string,
     input: LayoutInput,
-    affectedTableIds: string[]
+    affectedTableIds: string[],
+    minimumServiceDate: Date
   ) {
     if (!affectedTableIds.length) return;
     const reservations = await tx.reservation.findMany({
-      where: { restaurantId, status: { in: ["pending", "confirmed", "seated"] }, tables: { some: { tableId: { in: affectedTableIds } } } },
+      where: { restaurantId, status: { in: ["pending", "confirmed", "seated"] }, serviceDate: { gte: minimumServiceDate }, tables: { some: { tableId: { in: affectedTableIds } } } },
       include: { tables: { include: { table: true } } }
     });
     const occupiedStates = await tx.serviceState.findMany({ where: { restaurantId, tableId: { in: affectedTableIds }, status: "occupied", reservationId: { not: null } }, select: { reservationId: true } });
@@ -451,7 +475,8 @@ export class FloorPlansService {
     const restaurantId = this.restaurantScope(user);
 
     const room = await this.prisma.room.findFirst({
-      where: { id: roomId, restaurantId, isActive: true }
+      where: { id: roomId, restaurantId, isActive: true },
+      include: { branch: { select: { timezone: true } } }
     });
     if (!room) throw new NotFoundException("Room not found");
 
@@ -505,7 +530,7 @@ export class FloorPlansService {
       const affectedTableIds = activeTables
         .filter((table) => this.tableChangedByLayout(table, input.tables.find((next) => next.id === table.id)))
         .map((table) => table.id);
-      await this.assertLayoutReservationsRemainCompatible(tx, restaurantId, roomId, input, affectedTableIds);
+      await this.assertLayoutReservationsRemainCompatible(tx, restaurantId, roomId, input, affectedTableIds, this.todayInTimezone(room.branch.timezone));
       const removableTableIds = activeTables
         .filter((table) => !incomingTableIds.has(table.id) && !table.reservationLinks.length)
         .map((table) => table.id);

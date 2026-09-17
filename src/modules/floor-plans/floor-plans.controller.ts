@@ -89,6 +89,10 @@ const layoutSchema = z.object({
   )
 });
 
+const layoutImpactSchema = layoutSchema.extend({
+  focusTableId: z.string().min(1).optional()
+});
+
 @Controller("restaurant/rooms")
 export class FloorPlansController {
   constructor(private readonly floorPlansService: FloorPlansService) {}
@@ -178,7 +182,8 @@ export class FloorPlansController {
     @Body() body: unknown,
     @CurrentUser() user: RequestUser
   ) {
-    return this.floorPlansService.layoutImpact(user, roomId, layoutSchema.parse(body));
+    const { focusTableId, ...layout } = layoutImpactSchema.parse(body);
+    return this.floorPlansService.layoutImpact(user, roomId, layout, focusTableId);
   }
 
   @Put(":roomId/layout")

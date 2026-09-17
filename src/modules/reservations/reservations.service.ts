@@ -23,6 +23,16 @@ export class ReservationsService {
     return user.restaurantId;
   }
 
+  private isEventsUser(user: RequestUser) {
+    return user.scope === "restaurant" && user.role === "events";
+  }
+
+  private assertEventsCannotOperateStandardReservations(user: RequestUser) {
+    if (this.isEventsUser(user)) {
+      throw new ForbiddenException("El rol Eventos solo puede gestionar reservas de evento.");
+    }
+  }
+
   private normalizeOptionalEmail(email?: string | null) {
     const value = email?.trim();
     return value ? value.toLowerCase() : undefined;
@@ -130,8 +140,9 @@ export class ReservationsService {
         restaurantId,
         branchId: input.branchId,
         serviceDate: new Date(input.serviceDate),
-        turn: input.turn
-        , ...(input.specialServiceId ? { specialServiceId: input.specialServiceId } : {})
+        turn: input.turn,
+        ...(input.specialServiceId ? { specialServiceId: input.specialServiceId } : {}),
+        ...(this.isEventsUser(user) ? { eventRoomAssignments: { some: {} } } : {})
       },
       include: {
         room: true,
@@ -147,6 +158,7 @@ export class ReservationsService {
 
   async offlineBackup(user: RequestUser, input: { branchId: string; serviceDate: string; turn: "mediodia" | "noche"; specialServiceId?: string }) {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     const serviceDate = new Date(input.serviceDate);
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
 
@@ -232,6 +244,7 @@ export class ReservationsService {
     return this.prisma.reservation.findMany({
       where: {
         restaurantId,
+        ...(this.isEventsUser(user) ? { eventRoomAssignments: { some: {} } } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
         ...(input.turn && input.turn !== "all" ? { turn: input.turn } : {}),
         ...(input.status && input.status !== "all" ? { status: input.status as ReservationStatus } : {}),
@@ -292,6 +305,7 @@ export class ReservationsService {
     }
   ) {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     return this.createReservationForRestaurant(restaurantId, input, { actorUserId: user.sub });
   }
 
@@ -783,6 +797,7 @@ export class ReservationsService {
     preferredZone?: string;
   }) {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     const serviceDate = new Date(input.serviceDate);
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
     const turn = this.deriveTurnFromServiceTime(input.serviceTime);
@@ -806,6 +821,7 @@ export class ReservationsService {
     preferredZone?: string;
   }) {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     const serviceDate = new Date(input.serviceDate);
     if (Number.isNaN(serviceDate.getTime())) throw new BadRequestException("Invalid service date");
     const serviceTime = this.normalizeServiceTime(input.serviceTime);
@@ -911,6 +927,7 @@ export class ReservationsService {
 
   async moveToState(user: RequestUser, reservationId: string, next: "seated" | "completed") {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     return this.moveReservationToStateForRestaurant(restaurantId, { reservationId }, next, { actorUserId: user.sub });
   }
 
@@ -1019,6 +1036,7 @@ export class ReservationsService {
 
   async listTableOptions(user: RequestUser, reservationId: string) {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
     await this.assertRoomIsBookable(restaurantId, reservation.roomId, reservation.serviceDate, reservation.turn, this.prisma, reservation.specialServiceId, reservation.id);
 
@@ -1037,6 +1055,7 @@ export class ReservationsService {
 
   async listTableAvailabilityForReassignment(user: RequestUser, reservationId: string, roomId: string) {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
     await this.assertStandardReservationForManualReassignment(reservationId, restaurantId);
     const room = await this.prisma.room.findFirst({
@@ -1081,6 +1100,7 @@ export class ReservationsService {
 
   async reassignTables(user: RequestUser, reservationId: string, input: { roomId: string; tableIds: string[] }) {
     const restaurantId = this.restaurantScope(user);
+    this.assertEventsCannotOperateStandardReservations(user);
     const normalizedTableIds = [...new Set(input.tableIds)].sort();
     if (normalizedTableIds.length !== input.tableIds.length) throw new BadRequestException("Las mesas seleccionadas están repetidas.");
 

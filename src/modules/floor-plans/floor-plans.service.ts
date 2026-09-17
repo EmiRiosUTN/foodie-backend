@@ -388,7 +388,11 @@ export class FloorPlansService {
 
     const [reservations, occupiedStates] = await Promise.all([
       this.prisma.reservation.findMany({
-        where: { restaurantId, tables: { some: { tableId: { in: affectedTableIds } } } },
+        where: {
+          restaurantId,
+          status: { in: ["pending", "confirmed", "seated"] },
+          tables: { some: { tableId: { in: affectedTableIds } } }
+        },
         include: { branch: true, room: true, customer: { include: { tags: true } }, tables: { include: { table: true } }, eventRoomAssignments: { include: { room: true } } },
         orderBy: [{ serviceDate: "asc" }, { serviceTime: "asc" }]
       }),

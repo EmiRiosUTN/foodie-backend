@@ -828,7 +828,7 @@ export class ReservationsService {
     client: PrismaService | Prisma.TransactionClient,
     input: {
       restaurantId: string; roomId: string; serviceDate: Date; turn: "mediodia" | "noche"; partySize: number;
-      preferredZone?: string; preferredFeatures?: PreferredFeature[]; serviceTime?: string; durationMinutes?: number; turnoverMinutes?: number;
+      preferredZone?: string; preferredFeatures?: PreferredFeature[]; excludeReservationId?: string; serviceTime?: string; durationMinutes?: number; turnoverMinutes?: number;
     },
     tableIds: string[]
   ) {
@@ -842,7 +842,7 @@ export class ReservationsService {
     client: PrismaService | Prisma.TransactionClient,
     input: {
       restaurantId: string; roomId: string; serviceDate: Date; turn: "mediodia" | "noche"; partySize: number;
-      preferredZone?: string; preferredFeatures?: PreferredFeature[]; serviceTime?: string; durationMinutes?: number; turnoverMinutes?: number;
+      preferredZone?: string; preferredFeatures?: PreferredFeature[]; excludeReservationId?: string; serviceTime?: string; durationMinutes?: number; turnoverMinutes?: number;
     },
     tableIds: string[]
   ) {
@@ -1035,19 +1035,66 @@ export class ReservationsService {
     });
   }
 
-  async reassignTables(user: RequestUser, reservationId: string, tableIds: string[]) {
+  async listTableAvailabilityForReassignment(user: RequestUser, reservationId: string, roomId: string) {
     const restaurantId = this.restaurantScope(user);
-    const normalizedTableIds = [...new Set(tableIds)].sort();
-    if (normalizedTableIds.length !== tableIds.length) throw new BadRequestException("Las mesas seleccionadas están repetidas.");
+    const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
+    await this.assertStandardReservationForManualReassignment(reservationId, restaurantId);
+    const room = await this.prisma.room.findFirst({
+      where: { id: roomId, restaurantId, branchId: reservation.branchId, isActive: true },
+      include: { tables: true }
+    });
+    if (!room) throw new NotFoundException("Salon no encontrado en la sucursal de la reserva.");
+
+    const roomBlocked = await this.isRoomBlocked(restaurantId, room.id, reservation.serviceDate, reservation.turn);
+    const assignedToEvent = await this.isRoomAssignedToActiveEvent(restaurantId, room.id, reservation.serviceDate, reservation.turn, reservation.specialServiceId, this.prisma, reservation.id);
+    const roomUnavailableReason = roomBlocked
+      ? "El salon esta cerrado para este turno."
+      : assignedToEvent ? "El salon esta asignado a un evento." : null;
+    const availableTableIds = roomUnavailableReason ? new Set<string>() : new Set((await this.listAvailableTables(this.prisma, {
+      restaurantId,
+      roomId: room.id,
+      serviceDate: reservation.serviceDate,
+      turn: reservation.turn,
+      serviceTime: reservation.serviceTime,
+      durationMinutes: reservation.durationMinutes,
+      turnoverMinutes: reservation.turnoverMinutes,
+      partySize: reservation.partySize,
+      excludeReservationId: reservation.id,
+      requireFreeState: true
+    })).map((table) => table.id));
+
+    return {
+      roomId: room.id,
+      isBookable: !roomUnavailableReason,
+      unavailableReason: roomUnavailableReason,
+      tables: room.tables
+        .sort((left, right) => left.label.localeCompare(right.label, "es", { numeric: true }))
+        .map((table) => ({
+          id: table.id,
+          label: table.label,
+          seats: this.tableCapacity(table),
+          isAvailable: !roomUnavailableReason && table.isReservable && availableTableIds.has(table.id),
+          unavailableReason: roomUnavailableReason || (!table.isReservable ? "Esta mesa no acepta reservas." : availableTableIds.has(table.id) ? null : "No disponible para este horario.")
+        }))
+    };
+  }
+
+  async reassignTables(user: RequestUser, reservationId: string, input: { roomId: string; tableIds: string[] }) {
+    const restaurantId = this.restaurantScope(user);
+    const normalizedTableIds = [...new Set(input.tableIds)].sort();
+    if (normalizedTableIds.length !== input.tableIds.length) throw new BadRequestException("Las mesas seleccionadas están repetidas.");
 
     const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
+    await this.assertStandardReservationForManualReassignment(reservationId, restaurantId);
     const updated = await this.prisma.$transaction(async (tx) => {
       const current = await this.reassignableReservationOrThrow(restaurantId, reservationId, tx);
-      await this.assertRoomIsBookable(restaurantId, current.roomId, current.serviceDate, current.turn, tx, current.specialServiceId, current.id);
+      const targetRoom = await tx.room.findFirst({ where: { id: input.roomId, restaurantId, branchId: current.branchId, isActive: true } });
+      if (!targetRoom) throw new NotFoundException("Salon no encontrado en la sucursal de la reserva.");
+      await this.assertRoomIsBookable(restaurantId, targetRoom.id, current.serviceDate, current.turn, tx, current.specialServiceId, current.id);
 
-      const availableAssignments = await this.listAvailableAssignments(tx, {
+      const assignment = await this.findManualRequestedAssignment(tx, {
         restaurantId,
-        roomId: current.roomId,
+        roomId: targetRoom.id,
         serviceDate: current.serviceDate,
         turn: current.turn,
         partySize: current.partySize,
@@ -1055,8 +1102,7 @@ export class ReservationsService {
         durationMinutes: current.durationMinutes,
         turnoverMinutes: current.turnoverMinutes,
         excludeReservationId: current.id
-      });
-      const assignment = availableAssignments.find((option) => option.tableIds.join("|") === normalizedTableIds.join("|"));
+      }, normalizedTableIds);
       if (!assignment) throw new ConflictException("Las mesas seleccionadas ya no están disponibles para esta reserva.");
 
       await tx.reservationTable.deleteMany({ where: { reservationId: current.id } });
@@ -1068,6 +1114,8 @@ export class ReservationsService {
       const changed = await tx.reservation.update({
         where: { id: current.id },
         data: {
+          roomId: targetRoom.id,
+          ...(targetRoom.id === current.roomId ? {} : { preferredZone: null }),
           tables: { createMany: { data: assignment.tableIds.map((tableId) => ({ tableId })) } }
         },
         include: {
@@ -1082,11 +1130,11 @@ export class ReservationsService {
         assignment.tableIds.map((tableId) =>
           tx.serviceState.upsert({
             where: { tableId_reservationId: { tableId, reservationId: current.id } },
-            update: { status: "reserved", branchId: current.branchId, roomId: current.roomId, reservationId: current.id, specialServiceId: current.specialServiceId },
+            update: { status: "reserved", branchId: current.branchId, roomId: targetRoom.id, reservationId: current.id, specialServiceId: current.specialServiceId },
             create: {
               restaurantId,
               branchId: current.branchId,
-              roomId: current.roomId,
+              roomId: targetRoom.id,
               tableId,
               reservationId: current.id,
               serviceDate: current.serviceDate,
@@ -1101,14 +1149,14 @@ export class ReservationsService {
       return changed;
     });
 
-    this.realtimeService.publish("reservation.updated", { restaurantId, reservationId: updated.id, roomId: updated.roomId });
+    this.realtimeService.publish("reservation.updated", { restaurantId, reservationId: updated.id, roomId: updated.roomId, previousRoomId: reservation.roomId });
     await this.auditService.log({
       action: "reservation.tables_reassigned",
       targetType: "reservation",
       targetId: updated.id,
       restaurantId,
       restaurantUserId: user.sub,
-      metadata: { code: reservation.code, tableIds: normalizedTableIds }
+      metadata: { code: reservation.code, previousRoomId: reservation.roomId, roomId: input.roomId, tableIds: normalizedTableIds }
     });
     return updated;
   }
@@ -1608,6 +1656,14 @@ export class ReservationsService {
       throw new ConflictException("Solo se pueden cambiar las mesas de reservas pendientes o confirmadas.");
     }
     return reservation;
+  }
+
+  private async assertStandardReservationForManualReassignment(reservationId: string, restaurantId: string) {
+    const eventAssignment = await this.prisma.reservationRoomAssignment.findFirst({
+      where: { reservationId, reservation: { restaurantId } },
+      select: { id: true }
+    });
+    if (eventAssignment) throw new ConflictException("Las reservas de evento se gestionan desde sus salones asignados.");
   }
 
   private tableCapacity(table: { seats: number; metadata?: unknown }) {

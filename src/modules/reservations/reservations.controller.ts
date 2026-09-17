@@ -66,6 +66,7 @@ const availableManualTablesSchema = z.object({
 });
 
 const reassignTablesSchema = z.object({
+  roomId: z.string().min(1),
   tableIds: z.array(z.string().min(1)).min(1)
 });
 
@@ -170,8 +171,14 @@ export class ReservationsController {
     return this.reservationsService.listTableOptions(user, reservationId);
   }
 
+  @Get("restaurant/reservations/:reservationId/table-availability")
+  tableAvailability(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Query() query: Record<string, unknown>) {
+    return this.reservationsService.listTableAvailabilityForReassignment(user, reservationId, z.object({ roomId: z.string().min(1) }).parse(query).roomId);
+  }
+
   @Post("restaurant/reservations/:reservationId/reassign-tables")
   reassignTables(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Body() body: unknown) {
-    return this.reservationsService.reassignTables(user, reservationId, reassignTablesSchema.parse(body).tableIds);
+    const input = reassignTablesSchema.parse(body);
+    return this.reservationsService.reassignTables(user, reservationId, input);
   }
 }

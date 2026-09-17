@@ -30,6 +30,13 @@ type TableMetadata = {
   };
 };
 
+type LayoutInput = {
+  zones: Array<{ id: string; name: string; slug: string }>;
+  items: Array<{ id: string; kind: string; label?: string; x: number; y: number; width: number; height: number; rotation?: number; metadata?: Record<string, unknown> }>;
+  tables: Array<{ id: string; label: string; shape: string; seats: number; x: number; y: number; width: number; height: number; rotation?: number; isReservable: boolean; metadata?: Record<string, unknown>; zoneId?: string | null }>;
+  combinations: Array<{ id: string; parentTableId: string; childTableId: string; combinedSeats: number }>;
+};
+
 @Injectable()
 export class FloorPlansService {
   constructor(
@@ -105,7 +112,7 @@ export class FloorPlansService {
       include: {
         branch: true,
         zones: true,
-        tables: true
+        tables: { where: { isActive: true } }
       },
       orderBy: [{ bookingPriority: "asc" }, { createdAt: "asc" }]
     });
@@ -135,7 +142,7 @@ export class FloorPlansService {
     return room;
   }
 
-  private tableCapacity(table: { seats: number; metadata?: Record<string, unknown> }) {
+  private tableCapacity(table: { seats: number; metadata?: unknown }) {
     const metadata = (table.metadata || {}) as TableMetadata;
     return Math.max(1, metadata.capacity?.maxPartySize || table.seats);
   }
@@ -317,7 +324,7 @@ export class FloorPlansService {
       include: {
         zones: true,
         floorPlanItems: true,
-        tables: true
+        tables: { where: { isActive: true } }
       }
     });
     if (!room) {
@@ -334,43 +341,108 @@ export class FloorPlansService {
     };
   }
 
+  private tableChangedByLayout(
+    table: { id: string; label: string; shape: string; seats: number; x: number; y: number; width: number; height: number; rotation: number; isReservable: boolean; zoneId: string | null; metadata: Prisma.JsonValue | null },
+    next?: LayoutInput["tables"][number]
+  ) {
+    if (!next) return true;
+    return table.label !== next.label || table.shape !== next.shape || table.seats !== next.seats || table.x !== next.x || table.y !== next.y || table.width !== next.width || table.height !== next.height || table.rotation !== (next.rotation || 0) || table.isReservable !== next.isReservable || table.zoneId !== (next.zoneId || null) || JSON.stringify(table.metadata || {}) !== JSON.stringify(next.metadata || {});
+  }
+
+  private async layoutTablesOrThrow(restaurantId: string, roomId: string) {
+    const room = await this.prisma.room.findFirst({ where: { id: roomId, restaurantId, isActive: true } });
+    if (!room) throw new NotFoundException("Room not found");
+    return this.prisma.table.findMany({
+      where: { restaurantId, roomId, isActive: true },
+      select: { id: true, label: true, shape: true, seats: true, x: true, y: true, width: true, height: true, rotation: true, isReservable: true, zoneId: true, metadata: true }
+    });
+  }
+
+  private layoutImpactTableIds(existingTables: Awaited<ReturnType<FloorPlansService["layoutTablesOrThrow"]>>, input: LayoutInput) {
+    const incomingById = new Map(input.tables.map((table) => [table.id, table]));
+    return existingTables.filter((table) => this.tableChangedByLayout(table, incomingById.get(table.id))).map((table) => table.id);
+  }
+
+  private reservationLayoutCompatibility(
+    reservation: { partySize: number; tables: Array<{ table: { id: string; roomId: string; seats: number; isReservable: boolean; metadata: Prisma.JsonValue | null } }> },
+    roomId: string,
+    input: LayoutInput
+  ) {
+    const incomingById = new Map(input.tables.map((table) => [table.id, table]));
+    const finalTables = reservation.tables.map((link) => {
+      const draft = link.table.roomId === roomId ? incomingById.get(link.table.id) : undefined;
+      if (link.table.roomId === roomId && !draft) return null;
+      return draft || link.table;
+    });
+    const missingTable = finalTables.some((table) => !table);
+    const nonReservableTable = finalTables.some((table) => table && !table.isReservable);
+    const capacity = finalTables.reduce((total, table) => total + (table ? this.tableCapacity(table) : 0), 0);
+    return { missingTable, nonReservableTable, capacity, isCompatible: !missingTable && !nonReservableTable && capacity >= reservation.partySize };
+  }
+
+  async layoutImpact(user: RequestUser, roomId: string, input: LayoutInput) {
+    const restaurantId = this.restaurantScope(user);
+    const existingTables = await this.layoutTablesOrThrow(restaurantId, roomId);
+    const affectedTableIds = this.layoutImpactTableIds(existingTables, input);
+    if (!affectedTableIds.length) return { affectedTableIds: [], reservations: [], excludedTableIds: [] };
+
+    const [reservations, occupiedStates] = await Promise.all([
+      this.prisma.reservation.findMany({
+        where: { restaurantId, tables: { some: { tableId: { in: affectedTableIds } } } },
+        include: { branch: true, room: true, customer: { include: { tags: true } }, tables: { include: { table: true } }, eventRoomAssignments: { include: { room: true } } },
+        orderBy: [{ serviceDate: "asc" }, { serviceTime: "asc" }]
+      }),
+      this.prisma.serviceState.findMany({ where: { restaurantId, tableId: { in: affectedTableIds }, status: "occupied", reservationId: { not: null } }, select: { reservationId: true } })
+    ]);
+    const occupiedReservationIds = new Set(occupiedStates.map((state) => state.reservationId).filter((id): id is string => Boolean(id)));
+
+    const impacted = reservations.map((reservation) => {
+      const compatibility = this.reservationLayoutCompatibility(reservation, roomId, input);
+      const affectedTables = reservation.tables.filter((link) => affectedTableIds.includes(link.table.id)).map((link) => link.table.label);
+      const requiresReassignment = ["pending", "confirmed"].includes(reservation.status) && !compatibility.isCompatible;
+      const blocksLayout = reservation.status === "seated" || occupiedReservationIds.has(reservation.id);
+      const reasons = [
+        compatibility.missingTable ? "La mesa será eliminada o desactivada." : null,
+        compatibility.nonReservableTable ? "La mesa dejará de aceptar reservas." : null,
+        !compatibility.missingTable && !compatibility.nonReservableTable && compatibility.capacity < reservation.partySize ? "La capacidad final no alcanza los comensales." : null,
+        blocksLayout ? "La reserva está en curso y debe liberarse, completarse o cancelarse." : null
+      ].filter((reason): reason is string => Boolean(reason));
+      return { reservation, affectedTables, requiresReassignment, blocksLayout, reasons, finalCapacity: compatibility.capacity };
+    });
+
+    const excludedTableIds = input.tables.filter((table) => !table.isReservable).map((table) => table.id).concat(existingTables.filter((table) => !input.tables.some((next) => next.id === table.id)).map((table) => table.id));
+    return { affectedTableIds, reservations: impacted, excludedTableIds: [...new Set([...excludedTableIds, ...affectedTableIds])] };
+  }
+
+  private async assertLayoutReservationsRemainCompatible(
+    tx: Prisma.TransactionClient,
+    restaurantId: string,
+    roomId: string,
+    input: LayoutInput,
+    affectedTableIds: string[]
+  ) {
+    if (!affectedTableIds.length) return;
+    const reservations = await tx.reservation.findMany({
+      where: { restaurantId, status: { in: ["pending", "confirmed", "seated"] }, tables: { some: { tableId: { in: affectedTableIds } } } },
+      include: { tables: { include: { table: true } } }
+    });
+    const occupiedStates = await tx.serviceState.findMany({ where: { restaurantId, tableId: { in: affectedTableIds }, status: "occupied", reservationId: { not: null } }, select: { reservationId: true } });
+    const occupiedReservationIds = new Set(occupiedStates.map((state) => state.reservationId));
+    for (const reservation of reservations) {
+      if (reservation.status === "seated" || occupiedReservationIds.has(reservation.id)) {
+        throw new ConflictException("Hay una reserva en curso en una mesa modificada. Liberala, completala o cancelala antes de guardar.");
+      }
+      const compatibility = this.reservationLayoutCompatibility(reservation, roomId, input);
+      if (!compatibility.isCompatible) {
+        throw new ConflictException("Hay reservas pendientes o confirmadas que deben reasignarse antes de guardar el plano.");
+      }
+    }
+  }
+
   async replaceLayout(
     user: RequestUser,
     roomId: string,
-    input: {
-      zones: Array<{ id: string; name: string; slug: string }>;
-      items: Array<{
-        id: string;
-        kind: string;
-        label?: string;
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        rotation?: number;
-        metadata?: Record<string, unknown>;
-      }>;
-      tables: Array<{
-        id: string;
-        label: string;
-        shape: string;
-        seats: number;
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        rotation?: number;
-        isReservable: boolean;
-        metadata?: Record<string, unknown>;
-        zoneId?: string | null;
-      }>;
-      combinations: Array<{
-        id: string;
-        parentTableId: string;
-        childTableId: string;
-        combinedSeats: number;
-      }>;
-    }
+    input: LayoutInput
   ) {
     const restaurantId = this.restaurantScope(user);
 
@@ -409,23 +481,33 @@ export class FloorPlansService {
         where: { restaurantId, roomId },
         select: {
           id: true,
+          label: true,
+          shape: true,
+          seats: true,
+          x: true,
+          y: true,
+          width: true,
+          height: true,
+          rotation: true,
+          isReservable: true,
+          isActive: true,
+          zoneId: true,
+          metadata: true,
           reservationLinks: { select: { id: true }, take: 1 }
         }
       });
-      const protectedTableIds = new Set(
-        existingTables.filter((table) => table.reservationLinks.length > 0).map((table) => table.id)
-      );
       const incomingTableIds = new Set(input.tables.map((table) => table.id));
-      const removableTableIds = existingTables
-        .filter((table) => !incomingTableIds.has(table.id) && !protectedTableIds.has(table.id))
+      const activeTables = existingTables.filter((table) => table.isActive);
+      const affectedTableIds = activeTables
+        .filter((table) => this.tableChangedByLayout(table, input.tables.find((next) => next.id === table.id)))
         .map((table) => table.id);
-      const removedProtectedTables = existingTables.filter(
-        (table) => protectedTableIds.has(table.id) && !incomingTableIds.has(table.id)
-      );
-
-      if (removedProtectedTables.length) {
-        throw new ForbiddenException("Cannot remove tables that already have reservations");
-      }
+      await this.assertLayoutReservationsRemainCompatible(tx, restaurantId, roomId, input, affectedTableIds);
+      const removableTableIds = activeTables
+        .filter((table) => !incomingTableIds.has(table.id) && !table.reservationLinks.length)
+        .map((table) => table.id);
+      const deactivatableTableIds = activeTables
+        .filter((table) => !incomingTableIds.has(table.id) && table.reservationLinks.length)
+        .map((table) => table.id);
 
       const incomingZoneIds = new Set(input.zones.map((zone) => zone.id));
       const incomingItemIds = new Set(input.items.map((item) => item.id));
@@ -515,6 +597,13 @@ export class FloorPlansService {
         });
       }
 
+      if (deactivatableTableIds.length) {
+        await tx.table.updateMany({
+          where: { restaurantId, roomId, id: { in: deactivatableTableIds } },
+          data: { isActive: false, isReservable: false }
+        });
+      }
+
       for (const table of derivedTableInputs) {
         await tx.table.upsert({
           where: { id: table.id },
@@ -529,7 +618,8 @@ export class FloorPlansService {
             height: table.height,
             rotation: table.rotation || 0,
             metadata: table.metadata as Prisma.InputJsonValue | undefined,
-            isReservable: table.isReservable
+            isReservable: table.isReservable,
+            isActive: true
           },
           create: {
             id: table.id,
@@ -545,7 +635,8 @@ export class FloorPlansService {
             height: table.height,
             rotation: table.rotation || 0,
             metadata: table.metadata as Prisma.InputJsonValue | undefined,
-            isReservable: table.isReservable
+            isReservable: table.isReservable,
+            isActive: true
           }
         });
       }
@@ -577,7 +668,7 @@ export class FloorPlansService {
         include: {
           zones: true,
           floorPlanItems: true,
-          tables: true
+          tables: { where: { isActive: true } }
         }
       });
     });

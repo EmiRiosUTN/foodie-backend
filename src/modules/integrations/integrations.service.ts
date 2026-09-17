@@ -147,7 +147,7 @@ export class IntegrationsService {
             bookingRules: input.serviceDate && input.turn ? { where: { weekdays: { has: new Date(input.serviceDate).getUTCDay() }, turns: { has: input.turn }, startsAt: { lte: new Date(input.serviceDate) }, OR: [{ endsAt: null }, { endsAt: { gte: new Date(input.serviceDate) } }] }, select: { id: true } } : false,
             _count: {
               select: {
-                tables: true
+                tables: { where: { isActive: true } }
               }
             }
           },

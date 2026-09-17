@@ -157,7 +157,7 @@ export class OnlineBookingsService {
 
   async getPublicProfile(slug: string) {
     const restaurant = await this.restaurantBySlug(slug);
-    const tables = await this.prisma.table.findMany({ where: { restaurantId: restaurant.id, isReservable: true }, select: { metadata: true } });
+    const tables = await this.prisma.table.findMany({ where: { restaurantId: restaurant.id, isActive: true, isReservable: true }, select: { metadata: true } });
     const supportedFeatures = (["nearWindow", "nearColumn", "nearWall", "nearCorridor", "hasWindowView"] as PreferredFeature[]).filter((feature) => tables.some((table) => {
       const metadata = table.metadata as { derivedFeatures?: Record<string, boolean>; manualFeatures?: { hasTvView?: boolean } } | null;
       return feature === "hasWindowView" ? metadata?.manualFeatures?.hasTvView === true : metadata?.derivedFeatures?.[feature] === true;

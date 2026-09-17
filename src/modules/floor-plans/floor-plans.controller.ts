@@ -171,6 +171,16 @@ export class FloorPlansController {
     return this.floorPlansService.detail(user, roomId);
   }
 
+  @Post(":roomId/layout-impact")
+  @Roles("restaurant_owner", "restaurant_manager")
+  layoutImpact(
+    @Param("roomId") roomId: string,
+    @Body() body: unknown,
+    @CurrentUser() user: RequestUser
+  ) {
+    return this.floorPlansService.layoutImpact(user, roomId, layoutSchema.parse(body));
+  }
+
   @Put(":roomId/layout")
   @Roles("restaurant_owner", "restaurant_manager")
   replaceLayout(

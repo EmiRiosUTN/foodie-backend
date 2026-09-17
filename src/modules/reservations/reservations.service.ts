@@ -340,7 +340,7 @@ export class ReservationsService {
 
     const selectedRooms = await this.prisma.room.findMany({
       where: { id: { in: assignments.map((assignment) => assignment.roomId) }, restaurantId, branchId: input.branchId, isActive: true },
-      include: { tables: { where: { isReservable: true }, select: { seats: true, metadata: true } } }
+      include: { tables: { where: { isActive: true, isReservable: true }, select: { seats: true, metadata: true } } }
     });
     if (selectedRooms.length !== assignments.length) throw new NotFoundException("Uno o mas salones no existen o no pertenecen a la sede seleccionada.");
 
@@ -465,7 +465,7 @@ export class ReservationsService {
     }
     const rooms = await this.prisma.room.findMany({
       where: { id: { in: assignments.map((assignment) => assignment.roomId) }, restaurantId, branchId: reservation.branchId, isActive: true },
-      include: { tables: { where: { isReservable: true }, select: { seats: true, metadata: true } } }
+      include: { tables: { where: { isActive: true, isReservable: true }, select: { seats: true, metadata: true } } }
     });
     if (rooms.length !== assignments.length) throw new NotFoundException("Uno o mas salones no pertenecen a la sede de la reserva.");
     const roomById = new Map(rooms.map((room) => [room.id, room]));
@@ -539,7 +539,7 @@ export class ReservationsService {
   ) {
     const room = await this.prisma.room.findFirst({
       where: { id: input.roomId, restaurantId, branchId: input.branchId, isActive: true },
-      include: { tables: true }
+      include: { tables: { where: { isActive: true } } }
     });
     if (!room) {
       throw new NotFoundException("Room not found");
@@ -1042,13 +1042,13 @@ export class ReservationsService {
     });
   }
 
-  async listTableAvailabilityForReassignment(user: RequestUser, reservationId: string, roomId: string) {
+  async listTableAvailabilityForReassignment(user: RequestUser, reservationId: string, roomId: string, excludedTableIds: string[] = []) {
     const restaurantId = this.restaurantScope(user);
     const reservation = await this.reassignableReservationOrThrow(restaurantId, reservationId);
     await this.assertStandardReservationForManualReassignment(reservationId, restaurantId);
     const room = await this.prisma.room.findFirst({
       where: { id: roomId, restaurantId, branchId: reservation.branchId, isActive: true },
-      include: { tables: true }
+      include: { tables: { where: { isActive: true } } }
     });
     if (!room) throw new NotFoundException("Salon no encontrado en la sucursal de la reserva.");
 
@@ -1057,6 +1057,7 @@ export class ReservationsService {
     const roomUnavailableReason = roomBlocked
       ? "El salon esta cerrado para este turno."
       : assignedToEvent ? "El salon esta asignado a un evento." : null;
+    const excludedTableIdSet = new Set(excludedTableIds);
     const availableTableIds = roomUnavailableReason ? new Set<string>() : new Set((await this.listAvailableTables(this.prisma, {
       restaurantId,
       roomId: room.id,
@@ -1080,8 +1081,8 @@ export class ReservationsService {
           id: table.id,
           label: table.label,
           seats: this.tableCapacity(table),
-          isAvailable: !roomUnavailableReason && table.isReservable && availableTableIds.has(table.id),
-          unavailableReason: roomUnavailableReason || (!table.isReservable ? "Esta mesa no acepta reservas." : availableTableIds.has(table.id) ? null : "No disponible para este horario.")
+          isAvailable: !roomUnavailableReason && table.isReservable && !excludedTableIdSet.has(table.id) && availableTableIds.has(table.id),
+          unavailableReason: roomUnavailableReason || (excludedTableIdSet.has(table.id) ? "Esta mesa será modificada o eliminada." : !table.isReservable ? "Esta mesa no acepta reservas." : availableTableIds.has(table.id) ? null : "No disponible para este horario.")
         }))
     };
   }
@@ -1699,6 +1700,7 @@ export class ReservationsService {
       where: {
         restaurantId: input.restaurantId,
         roomId: input.roomId,
+        isActive: true,
         isReservable: true,
         ...(input.preferredZone ? { zoneId: input.preferredZone } : {})
       }

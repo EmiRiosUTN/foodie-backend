@@ -55,7 +55,8 @@ export class TablesService {
       where: {
         id: input.tableId,
         restaurantId,
-        roomId: input.roomId
+        roomId: input.roomId,
+        isActive: true
       }
     });
 

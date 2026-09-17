@@ -173,7 +173,8 @@ export class ReservationsController {
 
   @Get("restaurant/reservations/:reservationId/table-availability")
   tableAvailability(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Query() query: Record<string, unknown>) {
-    return this.reservationsService.listTableAvailabilityForReassignment(user, reservationId, z.object({ roomId: z.string().min(1) }).parse(query).roomId);
+    const input = z.object({ roomId: z.string().min(1), excludeTableIds: z.string().optional() }).parse(query);
+    return this.reservationsService.listTableAvailabilityForReassignment(user, reservationId, input.roomId, input.excludeTableIds?.split(",").filter(Boolean) || []);
   }
 
   @Post("restaurant/reservations/:reservationId/reassign-tables")

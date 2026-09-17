@@ -126,7 +126,7 @@ export class RestaurantsService {
               where: { isActive: true },
               include: {
                 zones: true,
-                tables: true
+                tables: { where: { isActive: true } }
               },
               orderBy: [{ bookingPriority: "asc" }, { createdAt: "asc" }]
             }

@@ -137,6 +137,16 @@ export class GiftCardsService {
     return { success: true };
   }
 
+  async previewProduct(user: RequestUser, input: ProductInput) {
+    this.owner(user);
+    this.validateProduct(input);
+    const validUntil = new Date();
+    validUntil.setUTCDate(validUntil.getUTCDate() + input.validityDays);
+    const amount = input.type === "FIXED_MENU" ? input.price! : input.minAmount || 10000;
+    const image = await this.renderGiftCard({ type: input.type, product: input, amount, currency: input.currency || "ARS" }, "MUESTRA1", validUntil);
+    return { image: `data:image/png;base64,${image.toString("base64")}` };
+  }
+
   private validateProduct(input: ProductInput) {
     if (input.name.trim().length < 2 || input.description.trim().length < 2) throw new ConflictException("El producto requiere nombre y descripción");
     if (!Number.isInteger(input.validityDays) || input.validityDays < 1 || input.validityDays > 3650) throw new ConflictException("La vigencia debe estar entre 1 y 3650 días");
@@ -248,8 +258,7 @@ export class GiftCardsService {
     return this.giftCardView(redeemed);
   }
 
-  private async generateAssets(order: any, code: string, validUntil: Date) {
-    const directory = join(process.cwd(), "uploads", "gift-cards", order.restaurantId, order.id); await mkdir(directory, { recursive: true });
+  private async renderGiftCard(order: any, code: string, validUntil: Date) {
     const assetsDirectory = join(process.cwd(), "assets"); const templatePath = join(assetsDirectory, "gift-card-template.png");
     process.env.FONTCONFIG_FILE ??= join(assetsDirectory, "fonts", "fonts.conf"); process.env.XDG_CACHE_HOME ??= join(process.cwd(), "uploads", ".cache"); await mkdir(join(process.env.XDG_CACHE_HOME, "fontconfig"), { recursive: true });
     const value = order.type === "FIXED_MENU" ? order.product?.name || "Gift Card" : displayAmount(order.amount, order.currency);
@@ -266,7 +275,12 @@ export class GiftCardsService {
       rotateTextBlock(rightBlockSvg, GIFT_CARD_RIGHT_BLOCK.width, GIFT_CARD_RIGHT_BLOCK.height, GIFT_CARD_RIGHT_BLOCK.centerX, GIFT_CARD_RIGHT_BLOCK.centerY),
       rotateTextBlock(dateBlockSvg, GIFT_CARD_DATE_BLOCK.width, GIFT_CARD_DATE_BLOCK.height, GIFT_CARD_DATE_BLOCK.centerX, GIFT_CARD_DATE_BLOCK.centerY),
     ]);
-    const renderedImage = await sharp(templatePath).composite([rightBlock, dateBlock]).png().toBuffer();
+    return sharp(templatePath).composite([rightBlock, dateBlock]).png().toBuffer();
+  }
+
+  private async generateAssets(order: any, code: string, validUntil: Date) {
+    const directory = join(process.cwd(), "uploads", "gift-cards", order.restaurantId, order.id); await mkdir(directory, { recursive: true });
+    const renderedImage = await this.renderGiftCard(order, code, validUntil);
     const imageFile = `gift-card-${code}.png`; const imagePath = join(directory, imageFile); await writeFile(imagePath, renderedImage);
     const pdfFile = `gift-card-${code}.pdf`; const pdfPath = join(directory, pdfFile);
     await new Promise<void>((resolve, reject) => { const doc = new PDFDocument({ size: [540, 720], margin: 0 }); const chunks: Buffer[] = []; doc.on("data", (chunk: Buffer) => chunks.push(chunk)); doc.on("end", async () => { try { await writeFile(pdfPath, Buffer.concat(chunks)); resolve(); } catch (error) { reject(error); } }); doc.on("error", reject); doc.image(renderedImage, 0, 0, { width: 540, height: 720 }); doc.end(); });

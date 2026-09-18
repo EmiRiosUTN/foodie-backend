@@ -36,6 +36,8 @@ export class GiftCardsController {
   @Roles("restaurant_owner")
   @Delete("restaurant/gift-cards/products/:id") deleteProduct(@CurrentUser() user: RequestUser, @Param("id") id: string) { return this.service.deleteProduct(user, id); }
   @Roles("restaurant_owner")
+  @Post("restaurant/gift-cards/products/preview") previewProduct(@CurrentUser() user: RequestUser, @Body() body: unknown) { return this.service.previewProduct(user, productSchema.parse(body)); }
+  @Roles("restaurant_owner")
   @Get("restaurant/gift-cards/orders") orders(@CurrentUser() user: RequestUser, @Query("from") from?: string, @Query("to") to?: string, @Query("productId") productId?: string, @Query("status") status?: string, @Query("paymentStatus") paymentStatus?: string, @Query("giftCardStatus") giftCardStatus?: string, @Query("search") search?: string, @Query("page") page?: string, @Query("pageSize") pageSize?: string) { return this.service.listOrders(user, { from, to, productId, status, paymentStatus, giftCardStatus, search, page, pageSize }); }
   @Roles("restaurant_owner")
   @Post("restaurant/gift-cards/orders/:id/payment") payment(@CurrentUser() user: RequestUser, @Param("id") id: string, @Body() body: { approved?: boolean; reference?: string }) { return this.service.confirmPayment(user, id, body.approved === true, body.reference); }

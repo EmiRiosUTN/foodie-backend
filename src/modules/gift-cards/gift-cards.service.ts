@@ -33,11 +33,11 @@ function dateBoundary(value: string, timezone: string, endExclusive = false) {
 const escapeXml = (value: string) => value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&quot;", '"': "&quot;", "'": "&apos;" })[character]!);
 
 const GIFT_CARD_TEXT_ANGLE = -4;
-const GIFT_CARD_RIGHT_BLOCK = { centerX: 775, centerY: 850, width: 330, height: 230, codeBaseline: 900 };
+const GIFT_CARD_RIGHT_BLOCK = { centerX: 775, centerY: 820, width: 330, height: 340, topPadding: 28, bottomPadding: 26, codeHeight: 28, sectionGap: 8, codeGap: 12 };
 const GIFT_CARD_DATE_BLOCK = { centerX: 380, centerY: 978, width: 240, height: 80, dateBaseline: 978 };
 
-type GiftCardTextLayout = { lines: string[]; fontSize: number; lineHeight: number };
-type GiftCardPrintLine = { text: string; fontSize: number; lineHeight: number; className: "gift-card-value" | "gift-card-description" };
+type GiftCardPrintLine = { text: string; fontSize: number; lineHeight: number; marginBefore: number; className: "gift-card-value" | "gift-card-description" };
+type GiftCardFlow = { lines: GiftCardPrintLine[]; codeBaseline: number };
 
 function approximateTextWidth(value: string, fontSize: number) {
   return Array.from(value).reduce((width, character) => width + (character === " " ? fontSize * 0.3 : fontSize * 0.65), 0);
@@ -60,34 +60,28 @@ function splitMenuValue(value: string, maxWidth: number, fontSize: number) {
   return lines;
 }
 
-function ellipsizeLine(value: string, maxWidth: number, fontSize: number) {
-  let result = value;
-  while (result.length > 1 && approximateTextWidth(`${result}…`, fontSize) > maxWidth) result = result.slice(0, -1).trimEnd();
-  return `${result}…`;
-}
-
-function textLayout(value: string, maxLines: number, maxFontSize: number, minFontSize: number): GiftCardTextLayout {
-  const normalizedValue = value.trim().replace(/\s+/g, " ") || "Gift Card";
-  for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 1) {
-    const lines = splitMenuValue(normalizedValue, GIFT_CARD_RIGHT_BLOCK.width, fontSize);
-    if (lines.length <= maxLines) return { lines, fontSize, lineHeight: Math.round(fontSize * 1.2) };
+function giftCardFlow(value: string, type: GiftCardProductType, description?: string): GiftCardFlow {
+  const title = value.trim().replace(/\s+/g, " ") || "Gift Card";
+  const detail = description?.trim().replace(/\s+/g, " ") || "";
+  const titleBaseSize = type === "OPEN_AMOUNT" ? 36 : 30;
+  const detailBaseSize = 17;
+  const availableHeight = GIFT_CARD_RIGHT_BLOCK.height - GIFT_CARD_RIGHT_BLOCK.topPadding - GIFT_CARD_RIGHT_BLOCK.bottomPadding - GIFT_CARD_RIGHT_BLOCK.codeHeight - GIFT_CARD_RIGHT_BLOCK.codeGap;
+  let selected: GiftCardPrintLine[] = [];
+  for (let scale = 100; scale >= 25; scale -= 5) {
+    const titleSize = Math.max(9, Math.round(titleBaseSize * scale / 100));
+    const detailSize = Math.max(8, Math.round(detailBaseSize * scale / 100));
+    const titleLineHeight = Math.round(titleSize * 1.16);
+    const detailLineHeight = Math.round(detailSize * 1.28);
+    const titleLines = splitMenuValue(title, GIFT_CARD_RIGHT_BLOCK.width, titleSize).map((text) => ({ text, fontSize: titleSize, lineHeight: titleLineHeight, marginBefore: 0, className: "gift-card-value" as const }));
+    const detailLines = detail ? splitMenuValue(detail, GIFT_CARD_RIGHT_BLOCK.width, detailSize).map((text, index) => ({ text, fontSize: detailSize, lineHeight: detailLineHeight, marginBefore: index === 0 ? GIFT_CARD_RIGHT_BLOCK.sectionGap : 0, className: "gift-card-description" as const })) : [];
+    const lines = [...titleLines, ...detailLines];
+    const totalHeight = lines.reduce((total, line) => total + line.marginBefore + line.lineHeight, 0);
+    selected = lines;
+    if (totalHeight <= availableHeight) break;
   }
-  const lines = splitMenuValue(normalizedValue, GIFT_CARD_RIGHT_BLOCK.width, minFontSize);
-  const visibleLines = lines.slice(0, maxLines);
-  if (lines.length > maxLines) visibleLines[maxLines - 1] = ellipsizeLine(lines.slice(maxLines - 1).join(" "), GIFT_CARD_RIGHT_BLOCK.width, minFontSize);
-  return { lines: visibleLines.length ? visibleLines : ["Gift Card"], fontSize: minFontSize, lineHeight: Math.round(minFontSize * 1.2) };
-}
-
-function giftCardPrintLines(value: string, type: GiftCardProductType, description?: string): GiftCardPrintLine[] {
-  const hasDescription = Boolean(description?.trim());
-  const valueLayout = type === "OPEN_AMOUNT"
-    ? textLayout(value, 1, 36, 22)
-    : textLayout(value, hasDescription ? 2 : 3, 30, 18);
-  const valueLines = valueLayout.lines.map((text) => ({ text, fontSize: valueLayout.fontSize, lineHeight: valueLayout.lineHeight, className: "gift-card-value" as const }));
-  if (!hasDescription) return valueLines;
-  const remainingLines = Math.max(1, 3 - valueLines.length);
-  const descriptionLayout = textLayout(description!, remainingLines, 17, 13);
-  return [...valueLines, ...descriptionLayout.lines.map((text) => ({ text, fontSize: descriptionLayout.fontSize, lineHeight: descriptionLayout.lineHeight, className: "gift-card-description" as const }))];
+  const contentHeight = selected.reduce((total, line) => total + line.marginBefore + line.lineHeight, 0);
+  const codeBaseline = GIFT_CARD_RIGHT_BLOCK.topPadding + contentHeight + GIFT_CARD_RIGHT_BLOCK.codeGap + GIFT_CARD_RIGHT_BLOCK.codeHeight;
+  return { lines: selected, codeBaseline };
 }
 
 async function rotateTextBlock(svg: string, width: number, height: number, centerX: number, centerY: number) {
@@ -261,13 +255,12 @@ export class GiftCardsService {
     const value = order.type === "FIXED_MENU" ? order.product?.name || "Gift Card" : displayAmount(order.amount, order.currency);
     const includeDescriptionInPrint = order.product?.restrictions?.includeDescriptionInPrint === true;
     const description = includeDescriptionInPrint ? order.product?.description?.trim() : undefined;
-    const date = displayDate(validUntil); const printLines = giftCardPrintLines(value, order.type, description);
-    const contentHeight = printLines.reduce((total, line) => total + line.lineHeight, 0);
-    let contentOffset = (GIFT_CARD_RIGHT_BLOCK.height / 2) - (contentHeight / 2);
+    const date = displayDate(validUntil); const flow = giftCardFlow(value, order.type, description);
+    let contentOffset = GIFT_CARD_RIGHT_BLOCK.topPadding;
     const rightTop = GIFT_CARD_RIGHT_BLOCK.centerY - (GIFT_CARD_RIGHT_BLOCK.height / 2);
     const dateTop = GIFT_CARD_DATE_BLOCK.centerY - (GIFT_CARD_DATE_BLOCK.height / 2);
-    const svgPrintLines = printLines.map((line) => { contentOffset += line.lineHeight; return `<text class="${line.className}" x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${contentOffset - (line.lineHeight * 0.2)}" text-anchor="middle" font-size="${line.fontSize}">${escapeXml(line.text)}</text>`; }).join("");
-    const rightBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_RIGHT_BLOCK.width}" height="${GIFT_CARD_RIGHT_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; } .gift-card-value { font-family: 'Playfair Display', serif; font-weight: 800; stroke: #282621; stroke-width: 0.45; } .gift-card-description { font-family: Montserrat, sans-serif; font-weight: 600; }</style>${svgPrintLines}<text x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${GIFT_CARD_RIGHT_BLOCK.codeBaseline - rightTop}" text-anchor="middle" font-size="22" font-weight="700" stroke="#282621" stroke-width="0.3" letter-spacing="1.8">${escapeXml(code)}</text></svg>`;
+    const svgPrintLines = flow.lines.map((line) => { contentOffset += line.marginBefore + line.lineHeight; return `<text class="${line.className}" x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${contentOffset - (line.lineHeight * 0.2)}" text-anchor="middle" font-size="${line.fontSize}">${escapeXml(line.text)}</text>`; }).join("");
+    const rightBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_RIGHT_BLOCK.width}" height="${GIFT_CARD_RIGHT_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; } .gift-card-value { font-family: 'Playfair Display', serif; font-weight: 800; stroke: #282621; stroke-width: 0.45; } .gift-card-description { font-family: Montserrat, sans-serif; font-weight: 600; }</style>${svgPrintLines}<text x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${flow.codeBaseline}" text-anchor="middle" font-size="22" font-weight="700" stroke="#282621" stroke-width="0.3" letter-spacing="1.8">${escapeXml(code)}</text></svg>`;
     const dateBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_DATE_BLOCK.width}" height="${GIFT_CARD_DATE_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; }</style><text x="${GIFT_CARD_DATE_BLOCK.width / 2}" y="${GIFT_CARD_DATE_BLOCK.dateBaseline - dateTop}" text-anchor="middle" font-size="20" font-weight="700" stroke="#282621" stroke-width="0.25">${escapeXml(date)}</text></svg>`;
     const [rightBlock, dateBlock] = await Promise.all([
       rotateTextBlock(rightBlockSvg, GIFT_CARD_RIGHT_BLOCK.width, GIFT_CARD_RIGHT_BLOCK.height, GIFT_CARD_RIGHT_BLOCK.centerX, GIFT_CARD_RIGHT_BLOCK.centerY),

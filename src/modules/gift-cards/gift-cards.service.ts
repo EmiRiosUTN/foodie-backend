@@ -33,7 +33,7 @@ function dateBoundary(value: string, timezone: string, endExclusive = false) {
 const escapeXml = (value: string) => value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&quot;", '"': "&quot;", "'": "&apos;" })[character]!);
 
 const GIFT_CARD_TEXT_ANGLE = -4;
-const GIFT_CARD_RIGHT_BLOCK = { centerX: 775, centerY: 820, width: 330, height: 340, topPadding: 28, bottomPadding: 26, codeHeight: 28, sectionGap: 8, codeGap: 12 };
+const GIFT_CARD_RIGHT_BLOCK = { centerX: 775, centerY: 910, width: 330, height: 260, topPadding: 14, bottomPadding: 14, codeHeight: 28, sectionGap: 8, codeGap: 12 };
 const GIFT_CARD_DATE_BLOCK = { centerX: 380, centerY: 978, width: 240, height: 80, dateBaseline: 978 };
 
 type GiftCardPrintLine = { text: string; fontSize: number; lineHeight: number; marginBefore: number; className: "gift-card-value" | "gift-card-description" };

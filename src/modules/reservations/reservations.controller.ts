@@ -69,6 +69,9 @@ const reassignTablesSchema = z.object({
   roomId: z.string().min(1),
   tableIds: z.array(z.string().min(1)).min(1)
 });
+const rescheduleSchema = z.object({
+  serviceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+});
 
 const cancellationSchema = z.object({
   reason: z.preprocess(
@@ -155,9 +158,15 @@ export class ReservationsController {
   }
 
   @Post("restaurant/reservations/:reservationId/cancel")
-  @Roles("restaurant_owner", "restaurant_manager")
+  @Roles("restaurant_owner", "restaurant_manager", "events")
   cancel(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Body() body: unknown) {
     return this.reservationsService.cancelManual(user, reservationId, cancellationSchema.parse(body || {}));
+  }
+
+  @Post("restaurant/reservations/:reservationId/reschedule")
+  @Roles("restaurant_owner", "restaurant_manager", "events")
+  reschedule(@CurrentUser() user: RequestUser, @Param("reservationId") reservationId: string, @Body() body: unknown) {
+    return this.reservationsService.reschedule(user, reservationId, rescheduleSchema.parse(body));
   }
 
   @Delete("restaurant/reservations/:reservationId")

@@ -1743,6 +1743,22 @@ export class ReservationsService {
     return availableTables;
   }
 
+  async reschedule(user: RequestUser, reservationId: string, input: { serviceDate: string }) {
+    const restaurantId = this.restaurantScope(user);
+    const reservation = await this.prisma.reservation.findFirst({
+      where: { id: reservationId, restaurantId },
+      select: { code: true }
+    });
+
+    if (!reservation) throw new NotFoundException("Reservation not found");
+
+    return this.updateReservationForRestaurant(
+      restaurantId,
+      { code: reservation.code, serviceDate: input.serviceDate },
+      { actorUserId: user.sub }
+    );
+  }
+
   private async listAvailableAssignments(
     client: PrismaService | Prisma.TransactionClient,
     input: {

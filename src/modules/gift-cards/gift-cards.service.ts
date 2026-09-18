@@ -13,11 +13,23 @@ import { createGiftCardCode } from "../../common/utils/code";
 
 type ProductInput = { name: string; type: GiftCardProductType; description: string; price?: number | null; minAmount?: number | null; maxAmount?: number | null; partySize?: number | null; currency?: string; validityDays: number; excludedDates?: string[]; restrictions?: Record<string, unknown> | null; paymentAlias?: string | null; paymentCbu?: string | null; paymentHolder?: string | null; isActive: boolean };
 type OrderInput = { productId?: string; type: GiftCardProductType; purchaserName: string; purchaserPhone: string; recipientName?: string | null; message?: string | null; partySize?: number | null; amount?: number; currency?: string };
+type OrderListQuery = { from?: string; to?: string; productId?: string; status?: string; paymentStatus?: string; giftCardStatus?: string; search?: string; page?: string; pageSize?: string };
 
 const money = (value: Prisma.Decimal | number) => Number(value);
 const dateOnly = (date: Date) => date.toISOString().slice(0, 10);
 const displayDate = (date: Date) => new Intl.DateTimeFormat("es-AR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
 const displayAmount = (amount: Prisma.Decimal | number, currency: string) => new Intl.NumberFormat("es-AR", { style: "currency", currency: currency || "ARS", maximumFractionDigits: 0 }).format(money(amount));
+
+function dateBoundary(value: string, timezone: string, endExclusive = false) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]); const month = Number(match[2]); const day = Number(match[3]) + (endExclusive ? 1 : 0);
+  const utcGuess = Date.UTC(year, month - 1, day);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(utcGuess));
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((item) => item.type === type)?.value || 0);
+  const localAsUtc = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
+  return new Date(utcGuess - (localAsUtc - utcGuess));
+}
 const escapeXml = (value: string) => value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&quot;", '"': "&quot;", "'": "&apos;" })[character]!);
 
 const GIFT_CARD_TEXT_ANGLE = -4;
@@ -139,11 +151,29 @@ export class GiftCardsService {
     if ([...(input.excludedDates || [])].some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date))) throw new ConflictException("Hay una fecha excluida inválida");
   }
 
-  async listOrders(user: RequestUser, query?: { status?: string; search?: string }) {
+  async listOrders(user: RequestUser, query: OrderListQuery = {}) {
     const restaurantId = this.owner(user);
-    const search = query?.search?.trim();
-    const orders = await this.prisma.giftCardOrder.findMany({ where: { restaurantId, ...(query?.status ? { status: query.status as any } : {}), ...(search ? { OR: [{ id: search }, { purchaserName: { contains: search, mode: "insensitive" } }, { purchaserPhone: { contains: search } }, { recipientName: { contains: search, mode: "insensitive" } }, { giftCard: { displayCode: search } }] } : {}) }, include: { product: true, giftCard: true }, orderBy: { createdAt: "desc" }, take: 500 });
-    return orders.map((order) => ({ id: order.id, purchaserName: order.purchaserName, purchaserPhone: order.purchaserPhone, recipientName: order.recipientName, message: order.message, type: order.type, partySize: order.partySize, amount: money(order.amount), currency: order.currency, paymentMethod: order.paymentMethod, paymentStatus: order.paymentStatus, status: order.status, paymentReference: order.paymentReference, paymentConfirmedAt: order.paymentConfirmedAt, createdAt: order.createdAt, product: order.product ? this.productView(order.product) : null, giftCard: order.giftCard ? this.giftCardView(order.giftCard) : null }));
+    const page = Math.max(1, Number.parseInt(query.page || "1", 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(query.pageSize || "10", 10) || 10));
+    const search = query.search?.trim();
+    const branch = await this.prisma.branch.findFirst({ where: { restaurantId }, orderBy: { createdAt: "asc" }, select: { timezone: true } });
+    const timezone = branch?.timezone || "America/Argentina/Buenos_Aires";
+    const from = query.from ? dateBoundary(query.from, timezone) : null;
+    const to = query.to ? dateBoundary(query.to, timezone, true) : null;
+    const where: Prisma.GiftCardOrderWhereInput = {
+      restaurantId,
+      ...(query.status ? { status: query.status as any } : {}),
+      ...(query.paymentStatus ? { paymentStatus: query.paymentStatus as any } : {}),
+      ...(query.productId === "__OPEN_AMOUNT__" ? { productId: null } : query.productId ? { productId: query.productId } : {}),
+      ...(query.giftCardStatus ? { giftCard: { is: { status: query.giftCardStatus as any } } } : {}),
+      ...((from || to) ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) } } : {}),
+      ...(search ? { OR: [{ id: search }, { purchaserName: { contains: search, mode: "insensitive" } }, { purchaserPhone: { contains: search } }, { recipientName: { contains: search, mode: "insensitive" } }, { product: { is: { name: { contains: search, mode: "insensitive" } } } }, { giftCard: { is: { displayCode: { contains: search, mode: "insensitive" } } } }] } : {}),
+    };
+    const [total, orders] = await Promise.all([
+      this.prisma.giftCardOrder.count({ where }),
+      this.prisma.giftCardOrder.findMany({ where, include: { product: true, giftCard: true }, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize }),
+    ]);
+    return { items: orders.map((order) => ({ id: order.id, purchaserName: order.purchaserName, purchaserPhone: order.purchaserPhone, recipientName: order.recipientName, message: order.message, type: order.type, partySize: order.partySize, amount: money(order.amount), currency: order.currency, paymentMethod: order.paymentMethod, paymentStatus: order.paymentStatus, status: order.status, paymentReference: order.paymentReference, paymentConfirmedAt: order.paymentConfirmedAt, createdAt: order.createdAt, product: order.product ? this.productView(order.product) : null, giftCard: order.giftCard ? this.giftCardView(order.giftCard) : null })), total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
   }
 
   private giftCardView(card: any) { const asset = (value: string | null) => value ? (value.startsWith("http") ? value : `${process.env.PUBLIC_API_ORIGIN || "http://localhost:4000"}${value}`) : null; return { id: card.id, code: card.displayCode, status: card.status, originalAmount: money(card.originalAmount), currency: card.currency, validFrom: dateOnly(card.validFrom), validUntil: dateOnly(card.validUntil), imageUrl: asset(card.imageUrl), pdfUrl: asset(card.pdfUrl), issuedAt: card.issuedAt, redeemedAt: card.redeemedAt }; }
@@ -203,16 +233,14 @@ export class GiftCardsService {
     return { id: cancelled.id, status: cancelled.status };
   }
 
-  async deleteCancelledOrder(user: RequestUser, orderId: string) {
+  async deleteOrder(user: RequestUser, orderId: string) {
     const restaurantId = this.owner(user);
-    const order = await this.prisma.giftCardOrder.findFirst({ where: { id: orderId, restaurantId }, include: { giftCard: { include: { redemptions: { select: { id: true }, take: 1 } } } } });
+    const order = await this.prisma.giftCardOrder.findFirst({ where: { id: orderId, restaurantId }, include: { giftCard: { include: { redemptions: { select: { id: true } } } } } });
     if (!order) throw new NotFoundException("Gift Card order not found");
-    if (order.status !== "CANCELLED") throw new ConflictException("Solo se pueden eliminar órdenes canceladas");
-    if (order.giftCard?.redemptions.length) throw new ConflictException("No se puede eliminar una Gift Card canjeada");
 
     await this.prisma.giftCardOrder.delete({ where: { id: order.id } });
     await rm(join(process.cwd(), "uploads", "gift-cards", restaurantId, order.id), { recursive: true, force: true });
-    await this.audit.log({ action: "gift_card.order.deleted", targetType: "gift_card_order", targetId: order.id, restaurantId, restaurantUserId: user.sub, metadata: { hadGiftCard: Boolean(order.giftCard) } });
+    await this.audit.log({ action: "gift_card.order.deleted", targetType: "gift_card_order", targetId: order.id, restaurantId, restaurantUserId: user.sub, metadata: { orderStatus: order.status, giftCardStatus: order.giftCard?.status || null, redemptionCount: order.giftCard?.redemptions.length || 0 } });
     return { id: order.id, deleted: true };
   }
 

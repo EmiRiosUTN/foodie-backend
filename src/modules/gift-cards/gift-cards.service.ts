@@ -33,7 +33,7 @@ function dateBoundary(value: string, timezone: string, endExclusive = false) {
 const escapeXml = (value: string) => value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&quot;", '"': "&quot;", "'": "&apos;" })[character]!);
 
 const GIFT_CARD_TEXT_ANGLE = -4;
-const GIFT_CARD_RIGHT_BLOCK = { centerX: 775, centerY: 910, width: 330, height: 260, topPadding: 14, bottomPadding: 14, codeHeight: 28, sectionGap: 8, codeGap: 12 };
+const GIFT_CARD_RIGHT_BLOCK = { centerX: 775, centerY: 890, width: 330, height: 260, topPadding: 14, bottomPadding: 14, codeHeight: 28, sectionGap: 8, codeGap: 12 };
 const GIFT_CARD_DATE_BLOCK = { centerX: 380, centerY: 978, width: 240, height: 80, dateBaseline: 978 };
 
 type GiftCardPrintLine = { text: string; fontSize: number; lineHeight: number; marginBefore: number; className: "gift-card-value" | "gift-card-description" };
@@ -260,7 +260,7 @@ export class GiftCardsService {
     const rightTop = GIFT_CARD_RIGHT_BLOCK.centerY - (GIFT_CARD_RIGHT_BLOCK.height / 2);
     const dateTop = GIFT_CARD_DATE_BLOCK.centerY - (GIFT_CARD_DATE_BLOCK.height / 2);
     const svgPrintLines = flow.lines.map((line) => { contentOffset += line.marginBefore + line.lineHeight; return `<text class="${line.className}" x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${contentOffset - (line.lineHeight * 0.2)}" text-anchor="middle" font-size="${line.fontSize}">${escapeXml(line.text)}</text>`; }).join("");
-    const rightBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_RIGHT_BLOCK.width}" height="${GIFT_CARD_RIGHT_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; } .gift-card-value { font-family: 'Playfair Display', serif; font-weight: 800; stroke: #282621; stroke-width: 0.45; } .gift-card-description { font-family: Montserrat, sans-serif; font-weight: 600; }</style>${svgPrintLines}<text x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${flow.codeBaseline}" text-anchor="middle" font-size="22" font-weight="700" stroke="#282621" stroke-width="0.3" letter-spacing="1.8">${escapeXml(code)}</text></svg>`;
+    const rightBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_RIGHT_BLOCK.width}" height="${GIFT_CARD_RIGHT_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; } .gift-card-value { font-family: 'Playfair Display', serif; font-weight: 800; stroke: #282621; stroke-width: 0.45; } .gift-card-description { font-family: Montserrat, sans-serif; font-weight: 600; }</style>${svgPrintLines}<text x="${GIFT_CARD_RIGHT_BLOCK.width / 2}" y="${flow.codeBaseline}" text-anchor="middle" font-size="22" font-weight="700" stroke="#282621" stroke-width="0.3" letter-spacing="1.8">${escapeXml(code.toUpperCase())}</text></svg>`;
     const dateBlockSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${GIFT_CARD_DATE_BLOCK.width}" height="${GIFT_CARD_DATE_BLOCK.height}"><style>text { font-family: Montserrat, sans-serif; fill: #282621; paint-order: stroke; }</style><text x="${GIFT_CARD_DATE_BLOCK.width / 2}" y="${GIFT_CARD_DATE_BLOCK.dateBaseline - dateTop}" text-anchor="middle" font-size="20" font-weight="700" stroke="#282621" stroke-width="0.25">${escapeXml(date)}</text></svg>`;
     const [rightBlock, dateBlock] = await Promise.all([
       rotateTextBlock(rightBlockSvg, GIFT_CARD_RIGHT_BLOCK.width, GIFT_CARD_RIGHT_BLOCK.height, GIFT_CARD_RIGHT_BLOCK.centerX, GIFT_CARD_RIGHT_BLOCK.centerY),
